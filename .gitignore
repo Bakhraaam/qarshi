@@ -1,0 +1,30 @@
+# ===== OS / редакторы =====
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# ===== СЕКРЕТЫ (никогда не коммитим) =====
+**/.env
+*.env
+!**/.env.example
+
+# ===== Python / Django (qarshi_backend) =====
+qarshi_backend/venv/
+**/__pycache__/
+*.py[cod]
+*.log
+qarshi_backend/media/
+qarshi_backend/staticfiles/
+qarshi_backend/static_collected/
+*.sqlite3
+
+# ===== Flutter (qarshi_front) =====
+# У qarshi_front есть свой .gitignore; дублируем ключевое на случай сборки из корня.
+qarshi_front/build/
+qarshi_front/.dart_tool/
+qarshi_front/.flutter-plugins
+qarshi_front/.flutter-plugins-dependencies
+qarshi_front/.packages

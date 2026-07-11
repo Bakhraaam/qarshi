@@ -1,0 +1,21 @@
+# Qarshi backend — зависимости (Python 3.11)
+# Версии закреплены по фактически установленным в рабочем окружении.
+
+# Ядро
+Django==5.2.14
+djangorestframework==3.17.1
+djangorestframework-simplejwt==5.5.1   # JWT для фронтенда (тянет PyJWT)
+django-filter==25.2                     # фильтры каталога (?category=, ?query=)
+django-cors-headers==4.9.0              # CORS для Flutter/Telegram WebApp
+
+# База данных
+psycopg2-binary==2.9.12                 # драйвер PostgreSQL
+
+# Кэш
+redis==8.0.1                            # бэкенд кэша каталога (django.core.cache RedisCache)
+
+# Работа с файлами/картинками
+Pillow==12.2.0                          # обязателен для ImageField (ItemImage)
+
+# Конфигурация
+python-dotenv==1.2.2                    # загрузка .env в settings.py
