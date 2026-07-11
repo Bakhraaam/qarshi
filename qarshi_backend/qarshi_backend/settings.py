@@ -57,6 +57,8 @@ MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'front_api.utils.DebugURLMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    # WhiteNoise раздаёт собранную статику (/static/, admin) прямо из gunicorn.
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -131,9 +133,9 @@ DATABASES = {
         "ENGINE": "django.db.backends.postgresql",
         'HOST': os.getenv("DB_HOST", "localhost"),
         'PORT': os.getenv("DB_PORT", "5432"),
-        'NAME': os.getenv("DB_NAME", "qarshi_db"),
-        'USER': os.getenv("DB_USER", "bakhraaam"),
-        'PASSWORD': os.getenv("DB_PASSWORD", "Cjiobapbaq1"),
+        'NAME': os.getenv("DB_NAME", "qarshi"),
+        'USER': os.getenv("DB_USER", "qarshi"),
+        'PASSWORD': os.getenv("DB_PASSWORD", ""),
     }
 }
 
@@ -154,6 +156,14 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
 STATIC_URL = 'static/'
+# Куда collectstatic собирает статику (для gunicorn/WhiteNoise и/или nginx).
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
+    },
+}
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field

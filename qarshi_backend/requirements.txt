@@ -19,3 +19,7 @@ Pillow==12.2.0                          # обязателен для ImageField
 
 # Конфигурация
 python-dotenv==1.2.2                    # загрузка .env в settings.py
+
+# Прод-сервер / статика
+gunicorn==23.0.0                        # WSGI-сервер для прод (Docker)
+whitenoise==6.11.0                      # раздача статики admin из gunicorn

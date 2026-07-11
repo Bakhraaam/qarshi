@@ -1,0 +1,18 @@
+# Секреты не пекутся в образ (передаются через env_file в рантайме)
+.env
+
+# Артефакты / окружения
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+media/
+staticfiles/
+static_collected/
+
+# VCS / IDE
+.git
+.gitignore
+.idea/
+.vscode/

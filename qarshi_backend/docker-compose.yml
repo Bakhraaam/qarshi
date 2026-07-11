@@ -1,0 +1,47 @@
+# Backend-стек: Django (gunicorn) + PostgreSQL + Redis.
+# Flutter и nginx разворачиваются отдельно.
+# Значения ${...} и env_file берутся из .env в этой же папке.
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  web:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Перекрываем хосты на имена сервисов внутри compose-сети
+      DB_HOST: db
+      REDIS_URL: redis://redis:6379/1
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    ports:
+      - "8000:8000"      # nginx на хосте проксирует сюда
+    volumes:
+      - staticfiles:/app/staticfiles   # можно отдать nginx'у на хосте
+      - media:/app/media
+
+volumes:
+  pgdata:
+  staticfiles:
+  media:
