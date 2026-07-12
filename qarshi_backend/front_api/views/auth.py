@@ -112,25 +112,32 @@ class TelegramAuthView(BaseFrontendAPIView):
 
         # При первом входе создаём профиль контрагента для этой организации:
         # user, организация, вид цены по умолчанию (is_default=True), is_blocked=False.
-        # get_or_create идемпотентен — при повторных входах ничего не дублирует.
         default_pt = self.current_organization.default_price_type
-        if default_pt:
-            UserProfile.objects.get_or_create(
+        profile = UserProfile.objects.filter(user=user, organization=self.current_organization).first()
+        if not profile and default_pt:
+            profile = UserProfile.objects.create(
                 user=user,
                 organization=self.current_organization,
-                defaults={
-                    'price_type': default_pt,
-                    'name': '',
-                    'is_blocked': False,
-                },
+                price_type=default_pt,
+                name='',
+                is_blocked=False,
             )
 
-        # 5. ПРОВЕРКА СТАТУСА БЛОКИРОВКИ ('blocked')
+        # 5. ПРОВЕРКА СТАТУСА БЛОКИРОВКИ
+        # Глобальная блокировка учётной записи Django
         if not user.is_active:
             return Response({
                 "ok": False,
                 "account_status": "blocked",
                 "message": "Вход запрещен. Ваш аккаунт заблокирован или отменен менеджером."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        # Блокировка профиля в ТЕКУЩЕЙ организации (is_blocked в UserProfile)
+        if profile and profile.is_blocked:
+            return Response({
+                "ok": False,
+                "account_status": "blocked",
+                "message": "Вход запрещен. Ваш аккаунт заблокирован или отменен менеджером в этой организации."
             }, status=status.HTTP_403_FORBIDDEN)
 
         # 6. ГЕНЕРАЦИЯ JWT-ТОКЕНОВ САЙТА
