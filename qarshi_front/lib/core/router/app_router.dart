@@ -21,13 +21,20 @@ class AppRouter {
 
       // Экраны авторизации, на которые redirect не должен зацикливаться
       final location = state.matchedLocation;
+      final bool inTelegram = isRunningInTelegram();
+
+      // Внутри Telegram парольный экран /login не показываем — только TWA-вход.
+      if (inTelegram && location == '/login') {
+        return '/login/telegram';
+      }
+
       final bool isGoingToAuth =
           location == '/login' || location == '/login/telegram';
 
       if (tokenAccess.isEmpty && !isGoingToAuth) {
         // Запуск внутри Telegram WebApp → бесшовный TWA-вход,
         // иначе — обычная форма логина/пароля.
-        return isRunningInTelegram() ? '/login/telegram' : '/login';
+        return inTelegram ? '/login/telegram' : '/login';
       }
 
       // if (isLoggedIn && isGoingToLogin) {

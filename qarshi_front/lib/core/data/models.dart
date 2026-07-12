@@ -74,6 +74,7 @@ class UserProfileModel {
   final PriceType priceType;
   final String inn;
   final bool isBlocked;
+  final String guidPartner1c; // пусто = не зарегистрирован в 1С
 
   UserProfileModel({
     required this.id,
@@ -81,7 +82,10 @@ class UserProfileModel {
     required this.priceType,
     required this.inn,
     required this.isBlocked,
+    this.guidPartner1c = '',
   });
+
+  bool get isRegistered => guidPartner1c.trim().isNotEmpty;
 
   // 1. Из JSON (для парсинга ответа от Django)
   factory UserProfileModel.fromJson(Map<String, dynamic>? json) {
@@ -92,6 +96,7 @@ class UserProfileModel {
       priceType: PriceType.fromJson(json['price_type']),
       inn: json['inn']?.toString() ?? '',
       isBlocked: json['is_blocked'] ?? false,
+      guidPartner1c: json['guid_partner1c']?.toString() ?? '',
     );
   }
 }
@@ -100,8 +105,14 @@ class SupportModel {
   final String phone;
   final String? tgUsername;
   final String instagram;
+  final String unregisteredNotice;
 
-  SupportModel({required this.phone, this.tgUsername, this.instagram = ''});
+  SupportModel({
+    required this.phone,
+    this.tgUsername,
+    this.instagram = '',
+    this.unregisteredNotice = '',
+  });
 
   // 1. Из JSON (для парсинга ответа от Django)
   factory SupportModel.fromJson(Map<String, dynamic>? json) {
@@ -110,6 +121,7 @@ class SupportModel {
       phone: json['phone'] ?? '',
       tgUsername: json['telegram_username'] ?? '',
       instagram: json['instagram'] ?? '',
+      unregisteredNotice: json['unregistered_notice'] ?? '',
     );
   }
 }

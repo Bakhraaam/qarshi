@@ -70,6 +70,7 @@ class UserAuthSerializer(serializers.ModelSerializer):
                 "name": "",
                 "inn": None,
                 "is_blocked": False,
+                "guid_partner1c": None,
                 "price_type": self._price_type_dict(price_type),
             }
 
@@ -79,6 +80,7 @@ class UserAuthSerializer(serializers.ModelSerializer):
             "name": profile.name,
             "inn": profile.inn,
             "is_blocked": profile.is_blocked,
+            "guid_partner1c": profile.guid_partner1c or None,
             "price_type": self._price_type_dict(price_type),
         }
 
@@ -93,9 +95,10 @@ class UserAuthSerializer(serializers.ModelSerializer):
                                                                                        ''),
                 "telegram_username": getattr(current_organization, 'support_telegram', '') or getattr(
                     current_organization, 'telegram_username', ''),
-                "instagram": getattr(current_organization, 'instagram', '') or ''
+                "instagram": getattr(current_organization, 'instagram', '') or '',
+                "unregistered_notice": getattr(current_organization, 'unregistered_notice', '') or ''
             }
-        return {"phone": "", "telegram_username": "", "instagram": ""}
+        return {"phone": "", "telegram_username": "", "instagram": "", "unregistered_notice": ""}
 
     def get_telegram_account(self, obj):
         """Возвращает глобальные данные телеграм аккаунта"""

@@ -77,7 +77,8 @@ class Sync1cUpdateOrganizationsView(Base1cAPIView):
                             #  price_type_id=pt_id,
                              support_phone=org.get("support_phone", ""),
                              telegram_bot_token=org.get("telegram_bot_token", ""),
-                             instagram=org.get("instagram", ""))
+                             instagram=org.get("instagram", ""),
+                             unregistered_notice=org.get("unregistered_notice", ""))
             )
 
         try:
@@ -85,7 +86,7 @@ class Sync1cUpdateOrganizationsView(Base1cAPIView):
                 with transaction.atomic():
                     Organization.objects.bulk_create(
                         orgs_to_upsert, update_conflicts=True,
-                        unique_fields=['id'], update_fields=['inn', 'name', 'prefix', 'support_phone', 'telegram_bot_token', 'instagram'],
+                        unique_fields=['id'], update_fields=['inn', 'name', 'prefix', 'support_phone', 'telegram_bot_token', 'instagram', 'unregistered_notice'],
                         batch_size=SYNC_BATCH_SIZE,
                     )
         except IntegrityError:

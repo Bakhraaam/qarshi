@@ -57,6 +57,11 @@ class _TelegramWebAppAuthScreenState extends State<TelegramWebAppAuthScreen>
           TelegramWebApp.instance.requestFullscreen();
         } catch (_) {}
 
+        // Даём переходу в fullscreen (особенно на десктопе) устаканиться до
+        // навигации/авторизации — иначе на десктопе экран подвисал.
+        await Future.delayed(const Duration(milliseconds: 400));
+        if (!mounted) return;
+
         final String initData = TelegramWebApp.instance.initData.raw;
 
         if (initData.isNotEmpty) {
@@ -121,104 +126,112 @@ class _TelegramWebAppAuthScreenState extends State<TelegramWebAppAuthScreen>
   @override
   Widget build(BuildContext context) {
     const accent = Color(0xFF2563EB);
+    // Фиксированные размеры (без ScreenUtil), плюс ограничение ширины —
+    // чтобы виджет был компактным и одинаковым на мобиле и десктопе.
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       body: Center(
-        child: Padding(
-          padding: EdgeInsets.all(32.w),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              // Логотип с пульсирующими кольцами (или иконка ошибки)
-              SizedBox(
-                width: 140.w,
-                height: 140.w,
-                child: _hasError
-                    ? Center(
-                        child: Container(
-                          padding: EdgeInsets.all(22.w),
-                          decoration: BoxDecoration(
-                            color: Colors.red.withValues(alpha: 0.08),
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(
-                            Icons.error_outline_rounded,
-                            color: Colors.red[600],
-                            size: 48.w,
-                          ),
-                        ),
-                      )
-                    : AnimatedBuilder(
-                        animation: _pulse,
-                        builder: (context, child) {
-                          return Stack(
-                            alignment: Alignment.center,
-                            children: [
-                              _ripple(accent, _pulse.value, 140.w),
-                              _ripple(accent, (_pulse.value + 0.5) % 1.0, 140.w),
-                              child!,
-                            ],
-                          );
-                        },
-                        child: Container(
-                          width: 84.w,
-                          height: 84.w,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            gradient: const LinearGradient(
-                              colors: [accent, Color(0xFF60A5FA)],
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: accent.withValues(alpha: 0.35),
-                                blurRadius: 24,
-                                offset: const Offset(0, 8),
-                              ),
-                            ],
-                          ),
-                          child: Icon(
-                            Icons.blur_on_rounded,
-                            color: Colors.white,
-                            size: 40.w,
-                          ),
-                        ),
-                      ),
-              ),
-              SizedBox(height: 28.h),
-              // Статус авторизации (без названия приложения)
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 250),
-                child: Text(
-                  _statusMessage,
-                  key: ValueKey(_statusMessage),
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 15.sp,
-                    color: _hasError
-                        ? Colors.red[700]
-                        : const Color(0xFF475569),
-                    fontWeight: FontWeight.w600,
-                    height: 1.4,
-                  ),
-                ),
-              ),
-              if (!_hasError) ...[
-                SizedBox(height: 20.h),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 320),
+          child: Padding(
+            padding: const EdgeInsets.all(28),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Логотип с пульсирующими кольцами (или иконка ошибки)
                 SizedBox(
-                  width: 120.w,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      minHeight: 3.5,
-                      backgroundColor: accent.withValues(alpha: 0.12),
-                      valueColor: const AlwaysStoppedAnimation<Color>(accent),
+                  width: 112,
+                  height: 112,
+                  child: _hasError
+                      ? Center(
+                          child: Container(
+                            padding: const EdgeInsets.all(18),
+                            decoration: BoxDecoration(
+                              color: Colors.red.withValues(alpha: 0.08),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              Icons.error_outline_rounded,
+                              color: Colors.red[600],
+                              size: 40,
+                            ),
+                          ),
+                        )
+                      : AnimatedBuilder(
+                          animation: _pulse,
+                          builder: (context, child) {
+                            return Stack(
+                              alignment: Alignment.center,
+                              children: [
+                                _ripple(accent, _pulse.value, 112),
+                                _ripple(
+                                    accent, (_pulse.value + 0.5) % 1.0, 112),
+                                child!,
+                              ],
+                            );
+                          },
+                          child: Container(
+                            width: 68,
+                            height: 68,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: const LinearGradient(
+                                colors: [accent, Color(0xFF60A5FA)],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: accent.withValues(alpha: 0.35),
+                                  blurRadius: 20,
+                                  offset: const Offset(0, 8),
+                                ),
+                              ],
+                            ),
+                            child: const Icon(
+                              Icons.blur_on_rounded,
+                              color: Colors.white,
+                              size: 32,
+                            ),
+                          ),
+                        ),
+                ),
+                const SizedBox(height: 24),
+                // Статус авторизации (без названия приложения)
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 250),
+                  child: Text(
+                    _statusMessage,
+                    key: ValueKey(_statusMessage),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: _hasError
+                          ? Colors.red[700]
+                          : const Color(0xFF475569),
+                      fontWeight: FontWeight.w600,
+                      height: 1.4,
                     ),
                   ),
                 ),
+                if (!_hasError) ...[
+                  const SizedBox(height: 18),
+                  SizedBox(
+                    width: 110,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        minHeight: 3.5,
+                        backgroundColor: accent.withValues(alpha: 0.12),
+                        valueColor:
+                            const AlwaysStoppedAnimation<Color>(accent),
+                      ),
+                    ),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),

@@ -22,6 +22,14 @@ class Organization(models.Model):
         default="",
         verbose_name="Instagram (ссылка или @username)"
     )
+    # Текст-предупреждение для незарегистрированных (у профиля пустой guid_partner1c),
+    # показывается при попытке оформить заказ.
+    unregistered_notice = models.CharField(
+        max_length=250,
+        blank=True,
+        default="",
+        verbose_name="Сообщение незарегистрированному клиенту"
+    )
     telegram_bot_token = models.CharField(
         max_length=255,
         blank=True,

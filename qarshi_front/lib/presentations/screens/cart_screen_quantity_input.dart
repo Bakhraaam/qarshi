@@ -139,6 +139,11 @@ class _CartScreenState extends State<CartScreen> {
   }
 
   Future<void> _showMobileCheckoutSheet() async {
+    // Незарегистрированным (нет guid_partner1c) — предупреждение вместо оформления.
+    if (!_isRegistered()) {
+      await _showUnregisteredDialog();
+      return;
+    }
     FocusScope.of(context).unfocus();
 
     await showModalBottomSheet<void>(
@@ -225,7 +230,85 @@ class _CartScreenState extends State<CartScreen> {
     );
   }
 
+  // Зарегистрирован ли контрагент в 1С (есть guid_partner1c).
+  bool _isRegistered() => currentUser?.userProfile.isRegistered ?? false;
+
+  Future<void> _showUnregisteredDialog() async {
+    final notice = (currentUser?.support.unregisteredNotice.trim() ?? '');
+    final text = notice.isNotEmpty
+        ? notice
+        : 'Ваш аккаунт ещё не подтверждён. Оформление заказа станет доступно после регистрации у менеджера.';
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.white,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 72,
+                height: 72,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: const Icon(Icons.info_outline_rounded,
+                    color: Color(0xFFD97706), size: 38),
+              ),
+              const SizedBox(height: 18),
+              const Text(
+                'Требуется регистрация',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xFF0F172A),
+                  fontSize: 19,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                text,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Color(0xFF64748B),
+                  fontSize: 13,
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 22),
+              SizedBox(
+                width: double.infinity,
+                height: 46,
+                child: FilledButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF2563EB),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text('Понятно',
+                      style: TextStyle(fontWeight: FontWeight.w700)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<bool> _confirmAndCheckout({BuildContext? parentContext}) async {
+    // Незарегистрированным (нет guid_partner1c) оформление недоступно.
+    if (!_isRegistered()) {
+      await _showUnregisteredDialog();
+      return false;
+    }
     // Дату доставки и способ оплаты НЕ требуем — оформляем сразу.
     final confirmed = await showDialog<bool>(
       context: parentContext ?? context,

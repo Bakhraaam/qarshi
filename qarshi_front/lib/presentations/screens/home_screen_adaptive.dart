@@ -11,6 +11,7 @@ import 'package:qarshi/core/utils/formatters.dart';
 import 'package:qarshi/presentations/screens/catalog_screen.dart';
 import 'package:qarshi/presentations/screens/catalog_screen_responsive.dart';
 import 'package:qarshi/presentations/screens/reconciliation_report_screen.dart';
+import 'package:qarshi/presentations/screens/orders_screen.dart';
 
 @js.JS('window')
 external js.JSObject get _window;
@@ -113,11 +114,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _openSection(int index) {
-    if (index == 2) {
-      _openSupport();
-      return;
-    }
-
     setState(() => _selectedSection = index);
   }
 
@@ -520,6 +516,7 @@ class _WideHome extends StatelessWidget {
                 index: selectedSection,
                 children: const [
                   CatalogScreen(embedded: false),
+                  OrdersScreen(),
                   ReconciliationReportScreen(),
                 ],
               ),
@@ -570,13 +567,21 @@ class _DesktopSidebar extends StatelessWidget {
           const SizedBox(height: 8),
           _SidebarItem(
             compact: compact,
-            icon: Icons.receipt_long_rounded,
-            title: 'Акт сверки',
+            icon: Icons.shopping_bag_rounded,
+            title: 'Заказы',
             selected: selectedIndex == 1,
             onTap: () => onChanged(1),
           ),
           const SizedBox(height: 8),
-          // Поддержка: номер телефона (клик — звонок)
+          _SidebarItem(
+            compact: compact,
+            icon: Icons.receipt_long_rounded,
+            title: 'Акт сверки',
+            selected: selectedIndex == 2,
+            onTap: () => onChanged(2),
+          ),
+          const Spacer(),
+          // --- Подвал сайдбара: телефон поддержки + Instagram ---
           Builder(
             builder: (context) {
               final phone = currentUser?.support.phone.trim() ?? '';
@@ -590,8 +595,6 @@ class _DesktopSidebar extends StatelessWidget {
               );
             },
           ),
-          const Spacer(),
-          // Instagram (в самом низу)
           Builder(
             builder: (context) {
               final ig = currentUser?.support.instagram.trim() ?? '';
@@ -605,8 +608,6 @@ class _DesktopSidebar extends StatelessWidget {
               );
             },
           ),
-          // if (cartTotalSum > 0)
-          //   _SidebarCart(compact: compact, totalSum: cartTotalSum),
         ],
       ),
     );
