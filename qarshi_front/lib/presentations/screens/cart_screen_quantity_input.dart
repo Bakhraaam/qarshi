@@ -114,7 +114,7 @@ class _CartScreenState extends State<CartScreen> {
 
     setState(() => _isCheckingOut = true);
 
-    final orderNumber = await _api.createOrder();
+    final (orderNumber, error) = await _api.createOrder();
 
     if (!mounted) return;
 
@@ -128,10 +128,12 @@ class _CartScreenState extends State<CartScreen> {
       return;
     }
 
+    // Показываем реальную причину с бэкенда, а не общий текст.
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Ошибка оформления заказа. Попробуйте позже.'),
+      SnackBar(
+        content: Text(error ?? 'Ошибка оформления заказа. Попробуйте позже.'),
         backgroundColor: Colors.red,
+        duration: const Duration(seconds: 6),
       ),
     );
   }

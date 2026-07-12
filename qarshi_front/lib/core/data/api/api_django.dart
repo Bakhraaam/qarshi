@@ -273,21 +273,30 @@ class DjangoApi {
     }
   }
 
-  Future<String?> createOrder() async {
+  /// Возвращает (orderNumber, error): при успехе orderNumber != null, error == null;
+  /// при ошибке orderNumber == null, error — текст причины с бэкенда.
+  Future<(String?, String?)> createOrder() async {
     try {
       final response = await _dio.post(
         'orders/',
         options: Options(headers: {'Authorization': 'Bearer $tokenAccess'}),
-      ); // Ваш эндпоинт в Django
-      if (response.statusCode == 200) {
-        return response.data['order_number'] ??
+      );
+      if (response.statusCode == 200 && response.data != null) {
+        final number = response.data['order_number'] ??
             response.data['number'] ??
             'Успешно';
+        return (number.toString(), null);
       }
-      return null;
+      return (null, 'Непредвиденный ответ сервера (${response.statusCode}).');
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      if (data is Map && data['message'] != null) {
+        // Реальная причина с бэкенда (напр. «Товар X не имеет цены…»)
+        return (null, data['message'].toString());
+      }
+      return (null, 'Ошибка сети: ${e.message}');
     } catch (e) {
-      print('Ошибка загрузки списка заказов: $e');
-      return null;
+      return (null, 'Ошибка оформления: $e');
     }
   }
 

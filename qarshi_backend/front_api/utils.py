@@ -105,13 +105,13 @@ class DebugURLMiddleware:
         self.enabled = bool(getattr(settings, "DEBUG", False))
 
     def __call__(self, request):
-        if self.enabled:
-            print("\n" + "="*50)
-            print("🚨 ПОЙМАН ВХОДЯЩИЙ ЗАПРОС:")
-            print(f"Метод:      {request.method}")
-            print(f"ПОЛНЫЙ URL: {request.build_absolute_uri()}")
-            print(f"Хост (Host): {request.get_host()}")
-            print(f"Путь (Path): {request.path}")
-            print("="*50 + "\n")
+        # if self.enabled:
+            # print("\n" + "="*50)
+            # print("🚨 ПОЙМАН ВХОДЯЩИЙ ЗАПРОС:")
+            # print(f"Метод:      {request.method}")
+            # print(f"ПОЛНЫЙ URL: {request.build_absolute_uri()}")
+            # print(f"Хост (Host): {request.get_host()}")
+            # print(f"Путь (Path): {request.path}")
+            # print("="*50 + "\n")
 
         return self.get_response(request)
