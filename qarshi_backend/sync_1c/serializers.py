@@ -83,27 +83,33 @@ class Order1COutputSerializer(serializers.ModelSerializer):
     # Выделяем клиента в отдельный вложенный параметр (объект)
     client = serializers.SerializerMethodField()
     items = OrderItem1CSerializer(many=True, read_only=True)
+    organization_id = serializers.UUIDField(read_only=True)
+    organization_prefix = serializers.CharField(source='organization.prefix', read_only=True)
 
     class Meta:
         model = Order
-        fields = ['id', 'order_number', 'client', 'total_amount', 'status', 'created_at', 'items']
+        fields = ['id', 'order_number', 'organization_id', 'organization_prefix',
+                  'client', 'total_amount', 'status', 'created_at', 'items']
 
     def get_client(self, obj):
         user = obj.user
 
-        # Безопасно вытягиваем доп. данные из профиля, если они у вас там есть (например, телефон, компания)
-        phone = getattr(user.profile, 'phone', '') if hasattr(user, 'profile') else ''
-        company_name = getattr(user.profile, 'company_name', '') if hasattr(user, 'profile') else ''
+        # UserProfile.user — обратная FK (related_name='profile'), т.е. МЕНЕДЖЕР:
+        # у пользователя может быть по профилю на каждую организацию. Берём профиль
+        # именно для организации этого заказа (иначе user.profile.id падал).
+        profile = user.profile.filter(organization=obj.organization).first()
+        tg = getattr(user, 'telegram_account', None)
 
-        # Собираем полную анкету, чтобы 1С могла создать контрагента на своей стороне
+        # Полная анкета, чтобы 1С могла создать/сопоставить контрагента
         return {
-            "id": user.profile.id,  # По этому ID 1С проверяет, есть ли уже такой клиент
+            "id": str(profile.id) if profile else None,
+            "guid_partner1c": profile.guid_partner1c if profile else None,
             "username": user.username,
-            "inn": user.profile.inn,
+            "inn": profile.inn if profile else None,
+            "name": profile.name if profile else "",
             "first_name": user.first_name,
             "last_name": user.last_name,
-            "phone": phone,  # Нужно для связи в 1С
-            "name": user.profile.name  # Название фирмы (критично для B2B в 1С)
+            "phone": (tg.phone if tg else "") or "",
         }
 
 

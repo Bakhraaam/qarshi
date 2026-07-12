@@ -803,22 +803,25 @@ class ItemImageUploadView(Base1cAPIView):
 
 
 class Sync1cPullOrdersView(Base1cAPIView):
+    """
+    1С забирает новые заказы (статус 'new').
+    Опциональный фильтр по организации: ?prefix=<org_prefix>.
+    Без параметра — все новые заказы (в каждом есть organization_prefix).
+    """
 
     def get(self, request, *args, **kwargs):
+        org_prefix = request.query_params.get('prefix') or self.kwargs.get('org_prefix')
 
-        org_prefix = self.kwargs.get('org_prefix')
+        orders = (Order.objects.filter(status='new')
+                  .select_related('organization', 'user')
+                  .prefetch_related('items__item'))
+        if org_prefix:
+            orders = orders.filter(organization__prefix=org_prefix)
 
-        if not org_prefix:
-            return Response({"ok": False, "message": "Не указан префикс организации в URL"},
-                            status=status.HTTP_400_BAD_REQUEST)
-
-        """1С забирает заказы со статусом 'new'"""
-        orders = Order.objects.filter(status='new').prefetch_related('items__item')
         serializer = Order1COutputSerializer(orders, many=True)
-
-        # Возвращаем стандартизированный ответ в виде словаря
         return Response({
             "ok": True,
+            "count": orders.count(),
             "result": serializer.data
         }, status=status.HTTP_200_OK)
 
