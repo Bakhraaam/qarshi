@@ -618,7 +618,14 @@ class _AccountHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tg = currentUser?.telegramAccount;
+    String? tgLine;
+    if (tg != null) {
+      final uname = tg.username.trim();
+      tgLine = uname.isNotEmpty ? '@$uname (${tg.id})' : '${tg.id}';
+    }
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _UserAvatar(size: 44),
         const SizedBox(width: 12),
@@ -631,16 +638,32 @@ class _AccountHeader extends StatelessWidget {
                 style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
               ),
               const SizedBox(height: 2),
+              // Имя переносится на 2 строки, а не обрезается.
               Text(
                 currentUser?.getName() ?? 'Пользователь',
-                maxLines: 1,
+                maxLines: 2,
+                softWrap: true,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   fontSize: 17,
                   fontWeight: FontWeight.w700,
                   color: Color(0xFF0F172A),
+                  height: 1.2,
                 ),
               ),
+              if (tgLine != null) ...[
+                const SizedBox(height: 3),
+                Text(
+                  tgLine,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF64748B),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
             ],
           ),
         ),

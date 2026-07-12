@@ -224,85 +224,98 @@ class _CartScreenState extends State<CartScreen> {
   }
 
   Future<bool> _confirmAndCheckout({BuildContext? parentContext}) async {
-    if (_deliveryDate == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Выберите дату доставки')));
-      return false;
-    }
-
+    // Дату доставки и способ оплаты НЕ требуем — оформляем сразу.
     final confirmed = await showDialog<bool>(
       context: parentContext ?? context,
       builder: (dialogContext) {
-        return AlertDialog(
+        return Dialog(
           backgroundColor: Colors.white,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(22),
           ),
-          title: const Text(
-            'Подтвердить заказ?',
-            style: TextStyle(
-              color: Color(0xFF0F172A),
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _ConfirmationRow(
-                label: 'Дата доставки',
-                value: _formatDate(_deliveryDate),
-              ),
-              const SizedBox(height: 10),
-              _ConfirmationRow(
-                label: 'Оплата',
-                value: _paymentMethodLabel(_paymentMethod),
-              ),
-              const SizedBox(height: 10),
-              _ConfirmationRow(label: 'Позиций', value: '$_totalItems'),
-              const SizedBox(height: 10),
-              _ConfirmationRow(
-                label: 'Итого',
-                value: formatPrice(_finalPrice),
-                emphasize: true,
-              ),
-              if (_commentController.text.trim().isNotEmpty) ...[
-                const SizedBox(height: 14),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
                 Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
+                  width: 76,
+                  height: 76,
+                  alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF8FAFC),
-                    borderRadius: BorderRadius.circular(12),
+                    color: const Color(0xFFEFF6FF),
+                    borderRadius: BorderRadius.circular(24),
                   ),
-                  child: Text(
-                    _commentController.text.trim(),
-                    maxLines: 4,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Color(0xFF475569),
-                      fontSize: 12,
-                      height: 1.35,
-                    ),
+                  child: const Icon(
+                    Icons.shopping_bag_rounded,
+                    color: Color(0xFF2563EB),
+                    size: 40,
                   ),
                 ),
+                const SizedBox(height: 20),
+                const Text(
+                  'Подтвердить заказ?',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Color(0xFF0F172A),
+                    fontSize: 21,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Позиций: $_totalItems   •   ${formatPrice(_finalPrice)}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xFF64748B),
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 26),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.of(dialogContext).pop(false),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          side: const BorderSide(color: Color(0xFFE2E8F0)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: const Text(
+                          'Отмена',
+                          style: TextStyle(
+                            color: Color(0xFF475569),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: () => Navigator.of(dialogContext).pop(true),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF2563EB),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: const Text(
+                          'Подтвердить',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ],
-            ],
+            ),
           ),
-          actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Отмена'),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF2563EB),
-              ),
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Подтвердить'),
-            ),
-          ],
         );
       },
     );
@@ -997,6 +1010,8 @@ class _CheckoutBottomBar extends StatelessWidget {
       elevation: 12,
       child: SafeArea(
         top: false,
+        // Больше отступ снизу, чтобы подвал не прятался за рамкой/жестами телефона.
+        minimum: const EdgeInsets.only(bottom: 24),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
           child: Row(

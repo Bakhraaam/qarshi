@@ -7,6 +7,9 @@ import 'package:telegram_web_app/telegram_web_app.dart';
 /// SafeArea не уходили под эти кнопки.
 final ValueNotifier<double> telegramTopInset = ValueNotifier<double>(0);
 
+/// Нижний отступ (домашний индикатор / жесты) в fullscreen Telegram.
+final ValueNotifier<double> telegramBottomInset = ValueNotifier<double>(0);
+
 bool _initialized = false;
 
 /// Подписывается на изменения safe-area/fullscreen Telegram и держит
@@ -23,7 +26,9 @@ void initTelegramInsets() {
         // contentSafeAreaInset отсчитывается внутри safeAreaInset, поэтому
         // суммируем: клиренс и от нотча, и от UI-элементов Telegram.
         final top = tg.safeAreaInset.top + tg.contentSafeAreaInset.top;
+        final bottom = tg.safeAreaInset.bottom + tg.contentSafeAreaInset.bottom;
         telegramTopInset.value = top.toDouble();
+        telegramBottomInset.value = bottom.toDouble();
       } catch (_) {}
     }
 

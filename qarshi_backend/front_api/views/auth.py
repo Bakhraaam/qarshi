@@ -124,12 +124,17 @@ class TelegramAuthView(BaseFrontendAPIView):
             )
 
         # 5. ПРОВЕРКА СТАТУСА БЛОКИРОВКИ
+        # Телефон поддержки филиала добавляем в текст, если он заполнен.
+        support_phone = (getattr(self.current_organization, 'support_phone', '') or '').strip()
+        contact_suffix = f" Телефон поддержки: {support_phone}" if support_phone else ""
+
         # Глобальная блокировка учётной записи Django
         if not user.is_active:
             return Response({
                 "ok": False,
                 "account_status": "blocked",
-                "message": "Вход запрещен. Ваш аккаунт заблокирован или отменен менеджером."
+                "support_phone": support_phone,
+                "message": "Вход запрещен. Ваш аккаунт заблокирован или отменен менеджером." + contact_suffix
             }, status=status.HTTP_403_FORBIDDEN)
 
         # Блокировка профиля в ТЕКУЩЕЙ организации (is_blocked в UserProfile)
@@ -137,7 +142,8 @@ class TelegramAuthView(BaseFrontendAPIView):
             return Response({
                 "ok": False,
                 "account_status": "blocked",
-                "message": "Вход запрещен. Ваш аккаунт заблокирован или отменен менеджером в этой организации."
+                "support_phone": support_phone,
+                "message": "Вход запрещен. Ваш аккаунт заблокирован или отменен менеджером в этой организации." + contact_suffix
             }, status=status.HTTP_403_FORBIDDEN)
 
         # 6. ГЕНЕРАЦИЯ JWT-ТОКЕНОВ САЙТА

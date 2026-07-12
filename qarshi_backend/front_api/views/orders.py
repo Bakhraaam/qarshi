@@ -57,7 +57,8 @@ class FrontendOrderViewSet(mixins.CreateModelMixin,
         ).first()
         if profile and profile.price_type:
             return profile.price_type
-        return self.current_organization.price_type
+        # У Organization нет поля price_type — розничный fallback по is_default.
+        return self.current_organization.default_price_type
 
     def get_serializer_context(self):
         context = super().get_serializer_context()

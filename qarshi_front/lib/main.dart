@@ -38,14 +38,18 @@ class MyApp extends StatelessWidget {
           // Добавляем к верхнему отступу MediaQuery клиренс под нативные кнопки
           // Telegram в fullscreen — так AppBar/SafeArea не уходят под них.
           builder: (context, child) {
-            return ValueListenableBuilder<double>(
-              valueListenable: telegramTopInset,
-              builder: (context, topInset, _) {
+            return AnimatedBuilder(
+              animation: Listenable.merge([
+                telegramTopInset,
+                telegramBottomInset,
+              ]),
+              builder: (context, _) {
                 final mq = MediaQuery.of(context);
                 return MediaQuery(
                   data: mq.copyWith(
                     padding: mq.padding.copyWith(
-                      top: mq.padding.top + topInset,
+                      top: mq.padding.top + telegramTopInset.value,
+                      bottom: mq.padding.bottom + telegramBottomInset.value,
                     ),
                   ),
                   child: child!,
