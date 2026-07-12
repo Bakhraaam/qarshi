@@ -81,8 +81,9 @@ class PriceListAdmin(admin.ModelAdmin):
 
 @admin.register(UserProfile)
 class UserProfileAdmin(admin.ModelAdmin):
-    list_display = ('name', 'name', 'user', 'price_type', 'id')
-    search_fields = ('name', 'inn', 'user')
+    list_display = ('name', 'user', 'organization', 'price_type', 'guid_partner1c', 'is_blocked', 'id')
+    list_filter = ('organization', 'is_blocked')
+    search_fields = ('name', 'inn', 'guid_partner1c', 'user__username')
 
 
 class OrderItemInline(admin.TabularInline):

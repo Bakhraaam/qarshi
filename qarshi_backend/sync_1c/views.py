@@ -10,7 +10,7 @@ from django.contrib.auth.hashers import make_password
 from django.utils.dateparse import parse_datetime  # Правильно парсит строки в дату
 from django.utils import timezone                  # Работает с временными зонами
 from .models import Order, OrderItem
-from .serializers import Order1COutputSerializer, Sync1cDirectTelegramUserSerializer
+from .serializers import Order1COutputSerializer, Sync1cDirectTelegramUserSerializer, UserProfileSyncSerializer
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.permissions import IsAuthenticated
 import uuid
@@ -456,6 +456,7 @@ class Sync1cUpdateUsersView(Base1cAPIView):
                         inn=u.get("inn", ""),
                         price_type=pt,
                         organization_id=org_id,
+                        guid_partner1c=u.get("guid_partner1c", ""),
                     ))
 
                 if profiles_to_upsert:
@@ -463,7 +464,7 @@ class Sync1cUpdateUsersView(Base1cAPIView):
                         profiles_to_upsert,
                         update_conflicts=True,
                         unique_fields=['id'],
-                        update_fields=['user', 'name', 'inn', 'price_type', 'organization'],
+                        update_fields=['user', 'name', 'inn', 'price_type', 'organization', 'guid_partner1c'],
                         batch_size=SYNC_BATCH_SIZE,
                     )
         except IntegrityError:
@@ -962,3 +963,118 @@ class Sync1cUpdateStocksView(Base1cAPIView):
                 "ok": False,
                 "message": f"Ошибка импорта. Убедитесь, что все товары и организации уже созданы на сайте. Текст ошибки: {str(e)}"
             }, status=status.HTTP_400_BAD_REQUEST)
+
+class Sync1cUserProfileListView(Base1cAPIView):
+    """
+    GET: список профилей контрагентов для 1С.
+    ?only_unlinked=1 — только непривязанные (пустой guid_partner1c).
+    """
+    only_unlinked = False
+
+    def get(self, request):
+        qs = (UserProfile.objects
+              .select_related('user', 'user__telegram_account', 'price_type', 'organization')
+              .all())
+
+        flag = request.query_params.get('only_unlinked')
+        want_unlinked = self.only_unlinked or (str(flag).lower() in ('1', 'true', 'yes'))
+        if want_unlinked:
+            qs = qs.filter(Q(guid_partner1c__isnull=True) | Q(guid_partner1c=''))
+
+        qs = qs.order_by('name', 'id')
+        serializer = UserProfileSyncSerializer(qs, many=True)
+        return Response({
+            "ok": True,
+            "only_unlinked": want_unlinked,
+            "count": qs.count(),
+            "result": serializer.data,
+        }, status=status.HTTP_200_OK)
+
+
+class Sync1cUserProfileUnlinkedView(Sync1cUserProfileListView):
+    """GET: только непривязанные профили (пустой guid_partner1c)."""
+    only_unlinked = True
+
+
+class Sync1cUserProfileUpsertView(Base1cAPIView):
+    """
+    POST: создание/обновление профилей контрагентов из 1С.
+    Принимает объект или массив объектов вида:
+      {"id": "<uuid профиля>", "guid_partner1c": "...", "name": "...",
+       "inn": "...", "price_type": "<uuid>", "is_blocked": false}
+    Обновляются существующие профили (по id): привязка guid_partner1c и полей.
+    Профиль должен существовать (создаётся при само-регистрации через Telegram
+    или эндпоинтом /user-profile/). Несуществующие id пропускаются.
+    """
+
+    def post(self, request):
+        payload = request.data
+        rows = payload if isinstance(payload, list) else [payload]
+
+        # Дедуп по id (последняя запись побеждает)
+        rows_by_id = {}
+        skipped = 0
+        for r in rows:
+            pid = r.get("id")
+            if not pid:
+                skipped += 1
+                continue
+            rows_by_id[str(pid)] = r
+
+        if not rows_by_id:
+            return Response(
+                {"ok": False, "message": f"Нет валидных строк (нет id). Пропущено: {skipped}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        profiles = {
+            str(p.id): p
+            for p in UserProfile.objects.select_related('organization').filter(id__in=list(rows_by_id.keys()))
+        }
+
+        # Предзагрузка видов цен, если 1С прислала их
+        price_type_ids = {r.get("price_type") for r in rows_by_id.values() if r.get("price_type")}
+        price_types = {str(pt.id): pt for pt in PriceType.objects.filter(id__in=price_type_ids)}
+
+        to_update = []
+        update_fields = set()
+        not_found = 0
+
+        for pid, r in rows_by_id.items():
+            profile = profiles.get(pid)
+            if not profile:
+                not_found += 1
+                continue
+
+            if "guid_partner1c" in r:
+                profile.guid_partner1c = r.get("guid_partner1c") or ""
+                update_fields.add("guid_partner1c")
+            if "name" in r:
+                profile.name = r.get("name") or ""
+                update_fields.add("name")
+            if "inn" in r:
+                profile.inn = r.get("inn") or ""
+                update_fields.add("inn")
+            if "is_blocked" in r:
+                profile.is_blocked = bool(r.get("is_blocked"))
+                update_fields.add("is_blocked")
+            if r.get("price_type"):
+                pt = price_types.get(str(r.get("price_type")))
+                # Вид цены должен принадлежать организации профиля
+                if pt and str(pt.organization_id) == str(profile.organization_id):
+                    profile.price_type = pt
+                    update_fields.add("price_type")
+
+            to_update.append(profile)
+
+        if to_update and update_fields:
+            with transaction.atomic():
+                UserProfile.objects.bulk_update(to_update, list(update_fields), batch_size=SYNC_BATCH_SIZE)
+
+        return Response({
+            "ok": not_found == 0 and skipped == 0,
+            "updated": len(to_update),
+            "not_found": not_found,
+            "skipped": skipped,
+            "message": f"Обновлено профилей: {len(to_update)}. Не найдено по id: {not_found}. Пропущено (нет id): {skipped}",
+        }, status=status.HTTP_200_OK)

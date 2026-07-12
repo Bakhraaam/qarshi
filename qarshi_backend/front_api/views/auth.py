@@ -107,9 +107,23 @@ class TelegramAuthView(BaseFrontendAPIView):
                 "message": f"Критическая ошибка при создании аккаунта: {str(parse_err)}"
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        # 4. ШАГ №2: Ищем Б2Б-профиль конкретно для ТЕКУЩЕЙ ОРГАНИЗАЦИИ
+        # 4. ШАГ №2: B2B-профиль для ТЕКУЩЕЙ ОРГАНИЗАЦИИ.
         user = tg_account.user
-        # profile = UserProfile.objects.filter(user=user, organization=self.current_organization).first()
+
+        # При первом входе создаём профиль контрагента для этой организации:
+        # user, организация, вид цены по умолчанию (is_default=True), is_blocked=False.
+        # get_or_create идемпотентен — при повторных входах ничего не дублирует.
+        default_pt = self.current_organization.default_price_type
+        if default_pt:
+            UserProfile.objects.get_or_create(
+                user=user,
+                organization=self.current_organization,
+                defaults={
+                    'price_type': default_pt,
+                    'name': '',
+                    'is_blocked': False,
+                },
+            )
 
         # 5. ПРОВЕРКА СТАТУСА БЛОКИРОВКИ ('blocked')
         if not user.is_active:

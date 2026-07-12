@@ -1,11 +1,15 @@
 from django.urls import path
-from .views import Sync1cGetNewTelegramUsersView, ItemImageUploadView, Sync1cPullOrdersView, Sync1cUpdateOrdersView, Sync1cUpdateStocksView, Sync1cUpdateOrganizationsView, Sync1cUpdateItemsView, Sync1cUpdatePricelistView, Sync1cUpdateItemTypesView, Sync1cUpdatePriceTypesView, Sync1cUpdateUsersView
+from .views import Sync1cGetNewTelegramUsersView, ItemImageUploadView, Sync1cPullOrdersView, Sync1cUpdateOrdersView, Sync1cUpdateStocksView, Sync1cUpdateOrganizationsView, Sync1cUpdateItemsView, Sync1cUpdatePricelistView, Sync1cUpdateItemTypesView, Sync1cUpdatePriceTypesView, Sync1cUpdateUsersView, Sync1cUserProfileListView, Sync1cUserProfileUnlinkedView, Sync1cUserProfileUpsertView
 urlpatterns = [
     # старый метод
     # path('data/', BulkDataSyncView.as_view(), name='bulk_data_sync'),
 
     # Маршрут для пользователей:
     path('user-profile/', Sync1cUpdateUsersView.as_view(), name='1c_update_user-profiles'),
+    # Профили контрагентов для 1С:
+    path('user-profiles/', Sync1cUserProfileListView.as_view(), name='1c_user_profiles_list'),           # общий список (?only_unlinked=1)
+    path('user-profiles/unlinked/', Sync1cUserProfileUnlinkedView.as_view(), name='1c_user_profiles_unlinked'),  # только непривязанные
+    path('user-profiles/upsert/', Sync1cUserProfileUpsertView.as_view(), name='1c_user_profiles_upsert'),        # создание/обновление из 1С
     # Маршрут для получения новых пользователей
     path('users/get/', Sync1cGetNewTelegramUsersView.as_view(), name='1c_get_users'),
     # Маршрут для номенклатуры:

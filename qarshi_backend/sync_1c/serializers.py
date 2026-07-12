@@ -179,3 +179,29 @@ class UserProfileSerializer(serializers.ModelSerializer):
         if price_obj:
             return PriceTypeSyncSerializer(price_obj).data
         return None
+
+class UserProfileSyncSerializer(serializers.ModelSerializer):
+    """Выгрузка профилей контрагентов в 1С (для связывания через guid_partner1c)."""
+    username = serializers.CharField(source='user.username', read_only=True)
+    organization_id = serializers.UUIDField(read_only=True)
+    price_type_id = serializers.UUIDField(read_only=True)
+    telegram = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UserProfile
+        fields = [
+            'id', 'name', 'inn', 'guid_partner1c', 'is_blocked',
+            'organization_id', 'price_type_id', 'username', 'telegram',
+        ]
+
+    def get_telegram(self, obj):
+        tg = getattr(obj.user, 'telegram_account', None)
+        if not tg:
+            return None
+        return {
+            'telegram_id': tg.telegram_id,
+            'username': tg.telegram_username,
+            'phone': tg.phone,
+            'first_name': tg.tg_first_name,
+            'last_name': tg.tg_last_name,
+        }

@@ -186,12 +186,16 @@ class UserProfile(models.Model):
         related_name='profile',
         verbose_name="Пользователь"
     )
-    name = models.CharField(max_length=255, verbose_name="Наименование контрагента")
+    name = models.CharField(max_length=255, blank=True, default="", verbose_name="Наименование контрагента")
     price_type = models.ForeignKey('PriceType', on_delete=models.CASCADE, null=False, blank=True,
                                    verbose_name="Тип цен")
     inn = models.CharField(max_length=13, null=True, blank=True, verbose_name="ИНН")
     organization = models.ForeignKey('Organization', null=False, on_delete=models.CASCADE, related_name='profiles',
                                      verbose_name="Организация")
+
+    # GUID контрагента в 1С. Пусто, пока 1С не привязала профиль к своему контрагенту.
+    guid_partner1c = models.CharField(max_length=255, null=True, blank=True, db_index=True,
+                                      verbose_name="GUID контрагента 1С")
 
     is_blocked = models.BooleanField(default=False, null=False, verbose_name="Заблокирован")
 
