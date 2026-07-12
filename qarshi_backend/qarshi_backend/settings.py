@@ -35,6 +35,15 @@ DEBUG = _env_bool("DEBUG", False)
 # Хосты берём из .env; по умолчанию — боевой домен. Пробелы вокруг значений срезаем.
 ALLOWED_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", "qarshi1s.uz,.qarshi1s.uz").split(",") if h.strip()]
 
+# Доверенные origins для CSRF (нужно для входа в /admin за HTTPS-прокси).
+# Задаётся в .env через запятую, ОБЯЗАТЕЛЬНО со схемой https://, например:
+#   CSRF_TRUSTED_ORIGINS=https://bot1.qarshi1s.uz,https://10.10.10.41
+CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()]
+
+# Мы за nginx/прокси, который терминирует HTTPS и шлёт X-Forwarded-Proto.
+# Без этого Django считает запрос http и ломает CSRF/secure-редиректы.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
 
 # Application definition
 
