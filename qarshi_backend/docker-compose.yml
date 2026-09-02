@@ -41,6 +41,27 @@ services:
       - staticfiles:/app/staticfiles   # можно отдать nginx'у на хосте
       - media:/app/media
 
+  # Бот в режиме long polling: сам ходит за апдейтами (getUpdates), входящий доступ
+  # от Telegram не нужен. Не поднимается обычным `docker compose up` — только явно:
+  #   docker compose --profile polling up -d bot
+  # Если вебхук работает, этот сервис не нужен: способы доставки взаимоисключающи.
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: db
+      REDIS_URL: redis://redis:6379/1
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    profiles: ["polling"]
+    # entrypoint делает migrate/collectstatic — это работа веб-сервиса, не воркера
+    entrypoint: []
+    command: python manage.py run_telegram_polling
+
 volumes:
   pgdata:
   staticfiles:

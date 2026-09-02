@@ -28,6 +28,11 @@ class TelegramWebhookView(BaseFrontendAPIView):
         provided = request.headers.get(SECRET_HEADER, '')
         expected = api.webhook_secret(organization.prefix or '')
         if not hmac.compare_digest(provided, expected):
+            # Частая причина: setWebhook сделали без secret_token или SECRET_KEY на сервере
+            # отличается от того, которым секрет считали
+            print(f"Telegram webhook '{organization.prefix}': отклонён запрос — "
+                  f"заголовок {SECRET_HEADER} "
+                  f"{'не совпал с ожидаемым' if provided else 'отсутствует'}")
             return Response({"ok": False, "message": "Неверный секрет вебхука"},
                             status=status.HTTP_403_FORBIDDEN)
 

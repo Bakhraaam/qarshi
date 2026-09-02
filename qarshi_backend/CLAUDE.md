@@ -84,5 +84,12 @@ python manage.py set_telegram_webhook --org avto --delete
 `TELEGRAM_WEBAPP_URL_TEMPLATE` (default `https://{prefix}.qarshi1s.uz`) builds both the WebApp button URLs and, unless
 `TELEGRAM_WEBHOOK_BASE_URL` is set, the webhook URL. Tests: `python manage.py test front_api` (Bot API is mocked).
 
+**Delivery is swappable.** Where Telegram cannot reach the server (inbound blocked — the `bot1.qarshi1s.uz` case,
+outbound works but Telegram's subnets time out on the way in), run long polling instead: `bot/polling.py` +
+`manage.py run_telegram_polling` feed the very same `handle_update`. The two modes are mutually exclusive —
+`getUpdates` returns 409 while a webhook is registered, so the command drops the webhook on start (keeping the
+queued updates). Offsets live in the cache (`telegram:polling:offset:<prefix>`), so a restart doesn't replay
+messages. In Docker it is a separate profiled service: `docker compose --profile polling up -d bot`.
+
 ### Order lifecycle
 Frontend places an order (`front_api/views/orders.py`) → `Order`/`OrderItem` created (status `new`, human number auto-generated as `ORD-YYYYMMDD-NNNN` in `Order.save()`) → 1C pulls it via `sync_1c` `orders/pull` → 1C writes back `order_number_1c` and status via `orders/update`.

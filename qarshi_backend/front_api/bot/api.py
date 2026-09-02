@@ -34,17 +34,18 @@ def webapp_base_url(organization) -> str:
     return template.format(prefix=organization.prefix or "").rstrip("/")
 
 
-def call(token: str, method: str, payload: dict | None = None) -> dict:
+def call(token: str, method: str, payload: dict | None = None, timeout: int | None = None) -> dict:
     """
     Синхронный вызов метода Bot API. Никогда не бросает исключение:
     при ошибке возвращает {"ok": False, "description": ...} — вебхук должен
     ответить Telegram 200 даже если отправка сообщения не удалась.
+    timeout переопределяется для long polling (getUpdates держит соединение открытым).
     """
     url = API_URL.format(token=token, method=method)
     data = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+        with urllib.request.urlopen(request, timeout=timeout or REQUEST_TIMEOUT) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as http_err:
         # Telegram отдаёт причину в теле ответа (например: chat not found, bot was blocked)
@@ -65,7 +66,12 @@ def send_message(token: str, chat_id: int, text: str, reply_markup: dict | None 
     }
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup
-    return call(token, "sendMessage", payload)
+    result = call(token, "sendMessage", payload)
+    if not result.get("ok"):
+        # Молчащий бот при живом вебхуке — почти всегда именно эта строка:
+        # нет исходящего доступа к api.telegram.org, неверный токен или бот заблокирован
+        print(f"Telegram sendMessage FAILED (chat_id={chat_id}): {result.get('description')}")
+    return result
 
 
 # --- Клавиатуры ---

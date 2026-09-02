@@ -1,7 +1,8 @@
 """Тесты Telegram-бота филиала (вебхук + сценарии сообщений)."""
-from django.test import TestCase
+from django.core.cache import cache
+from django.test import TestCase, override_settings
 
-from front_api.bot import api, handlers
+from front_api.bot import api, handlers, polling
 from front_api.models import TelegramAccount
 from sync_1c.models import Organization, PriceType, UserProfile
 
@@ -172,3 +173,78 @@ class TelegramWebhookViewTests(TestCase):
         response = self.post(url="/api/v1/nosuchorg/telegram/webhook/",
                              secret=api.webhook_secret("nosuchorg"))
         self.assertEqual(response.status_code, 404)
+
+
+@override_settings(CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}})
+class TelegramPollingTests(TestCase):
+    """Long polling — запасной способ доставки, когда Telegram не может достучаться вебхуком."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.org = Organization.objects.create(
+            inn="123456789", name="Тестовый магазин", prefix="bot1",
+            telegram_bot_token="123:FAKE",
+        )
+        PriceType.objects.create(name="Розница", organization=cls.org, is_default=True)
+
+    def setUp(self):
+        cache.clear()
+        self.calls = []
+        self.responses = []
+        self._real_call = api.call
+
+        def fake_call(token, method, payload=None, timeout=None):
+            self.calls.append((method, payload))
+            if method == "getUpdates" and self.responses:
+                return self.responses.pop(0)
+            return {"ok": True, "result": []}
+
+        api.call = fake_call
+
+    def tearDown(self):
+        api.call = self._real_call
+
+    def update(self, update_id, text="/start"):
+        return {"update_id": update_id,
+                "message": {"chat": {"id": TG_ID, "type": "private"},
+                            "from": {"id": TG_ID, "first_name": "Иван"}, "text": text}}
+
+    def test_updates_are_processed_and_offset_advances(self):
+        self.responses = [{"ok": True, "result": [self.update(10), self.update(11)]}]
+
+        offset, processed = polling.poll_once(self.org, None, log=lambda m: None)
+
+        self.assertEqual((offset, processed), (12, 2))
+        self.assertEqual(polling.get_offset(self.org), 12)
+        self.assertTrue(TelegramAccount.objects.filter(telegram_id=TG_ID).exists())
+        self.assertIn("sendMessage", [method for method, _ in self.calls])
+
+    def test_offset_is_sent_back_to_telegram(self):
+        polling.set_offset(self.org, 42)
+        polling.poll_once(self.org, polling.get_offset(self.org), log=lambda m: None)
+
+        method, payload = self.calls[0]
+        self.assertEqual(method, "getUpdates")
+        self.assertEqual(payload["offset"], 42)
+        self.assertEqual(payload["allowed_updates"], ["message"])
+
+    def test_failing_update_still_advances_offset(self):
+        """Апдейт, роняющий обработчик, не должен блокировать очередь навсегда."""
+        self.responses = [{"ok": True, "result": [self.update(7)]}]
+        real_handle = polling.handle_update
+        polling.handle_update = lambda org, upd: (_ for _ in ()).throw(RuntimeError("боом"))
+        try:
+            offset, processed = polling.poll_once(self.org, None, log=lambda m: None)
+        finally:
+            polling.handle_update = real_handle
+
+        self.assertEqual((offset, processed), (8, 1))
+
+    def test_active_webhook_conflict_is_resolved(self):
+        self.responses = [{"ok": False, "description":
+                           "Conflict: can't use getUpdates method while webhook is active"}]
+
+        offset, processed = polling.poll_once(self.org, 5, log=lambda m: None)
+
+        self.assertEqual((offset, processed), (5, 0))
+        self.assertIn("deleteWebhook", [method for method, _ in self.calls])
