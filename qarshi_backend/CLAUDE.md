@@ -52,9 +52,37 @@ Two Django apps sit on top of a shared data model. Understanding the split is th
 - **Two auth schemes coexist.** Global default (`settings.REST_FRAMEWORK`) is `TokenAuthentication` + `IsAuthenticated` — this governs the `sync_1c` (1C) endpoints. Frontend auth issues **SimpleJWT** tokens; auth endpoints (`auth/login`, `auth/register`, `auth/telegram`) set `authentication_classes = []` / `permission_classes = []` and return JWT access/refresh pairs (access 1 day, refresh 30 days).
 - **User model.** Uses stock `django.contrib.auth.User`. A Django `User` is global; per-organization identity/pricing lives in `UserProfile` (has `organization` + `price_type`). Registration namespaces usernames as `{org_prefix}_{username}`; Telegram signups use `tg_{telegram_id}`.
 - **Pricing** is per-organization and per-`PriceType`: `PriceList` is unique on `(item, price_type, organization)`. A user sees prices for their profile's `price_type`; anonymous users fall back to `Organization.price_type`.
-- **Telegram WebApp login** (`auth/telegram`): `front_api/utils.py::verify_telegram_webapp_data` validates the HMAC signature against the org's `telegram_bot_token`. ⚠️ Signature verification is currently **bypassed** in `TelegramAuthView.post` (see the `TODO: Вернуть ... перед деплоем` comment) — `init_data` is parsed without verification. Restore before production.
+- **Telegram WebApp login** (`auth/telegram`): `front_api/utils.py::verify_telegram_webapp_data` validates the HMAC signature against the org's `telegram_bot_token` and checks `auth_date` freshness (`TELEGRAM_AUTH_TTL_SECONDS`, default 24h). Note the `signature` field must stay inside `data_check_string` or the HMAC won't match. Account creation/sync is shared with the bot via `front_api/bot/accounts.py` (`upsert_telegram_account`, `ensure_profile`).
 - `front_api.utils.DebugURLMiddleware` (first in the MIDDLEWARE stack) prints every incoming request to stdout; the sync/auth code also `print()`s liberally for debugging.
 - `CORS_ALLOW_ALL_ORIGINS = True` is on. `TIME_ZONE = 'Asia/Tashkent'`, `LANGUAGE_CODE = 'ru-ru'`.
+
+### Telegram-бот филиала (`front_api/bot/`)
+One bot per organization (token in `Organization.telegram_bot_token`), driven by a **webhook**, not polling:
+`POST /api/v1/<org_prefix>/telegram/webhook/` (`front_api/views/telegram_bot.py`). Authenticity is the
+`X-Telegram-Bot-Api-Secret-Token` header, compared against `api.webhook_secret(prefix)` — an HMAC of `SECRET_KEY`,
+so no extra DB field and nothing to sync with 1C. Anything other than a bad secret answers **200** on purpose:
+Telegram must not retry what we cannot process.
+
+- `bot/texts.py` — all wording (business tone, ru only). Edit texts here, never in handlers.
+- `bot/api.py` — Bot API client on stdlib `urllib` (no new dependency) + reply keyboards. Only reply keyboards are
+  used: a new one replaces the old, so the "share phone" button disappears by itself once the number arrives.
+- `bot/handlers.py` — `/start`, contact, foreign contact, free text, blocked access.
+- `bot/accounts.py` — shared with `TelegramAuthView`.
+
+Phone is **requested, not required**: the catalog WebApp button sits next to the contact button, and nothing in the
+WebApp gates on `TelegramAccount.phone`. There is no way to match a phone to a 1C counterparty on the backend —
+`UserProfile` has no phone field — so after a contact arrives the bot only promises "передано менеджеру"; the real
+link appears when 1C fills `guid_partner1c`.
+
+Registering the webhook (needs a public HTTPS URL; locally use the ngrok tunnel):
+```bash
+python manage.py set_telegram_webhook                                  # all orgs with a bot token
+python manage.py set_telegram_webhook --org avto                       # one branch
+python manage.py set_telegram_webhook --base-url https://x.ngrok-free.app   # local dev
+python manage.py set_telegram_webhook --org avto --delete
+```
+`TELEGRAM_WEBAPP_URL_TEMPLATE` (default `https://{prefix}.qarshi1s.uz`) builds both the WebApp button URLs and, unless
+`TELEGRAM_WEBHOOK_BASE_URL` is set, the webhook URL. Tests: `python manage.py test front_api` (Bot API is mocked).
 
 ### Order lifecycle
 Frontend places an order (`front_api/views/orders.py`) → `Order`/`OrderItem` created (status `new`, human number auto-generated as `ORD-YYYYMMDD-NNNN` in `Order.save()`) → 1C pulls it via `sync_1c` `orders/pull` → 1C writes back `order_number_1c` and status via `orders/update`.

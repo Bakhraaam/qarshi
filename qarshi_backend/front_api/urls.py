@@ -5,6 +5,7 @@ from .views.auth import FrontendLoginView, FrontendRegisterView, TelegramAuthVie
 from .views.cart import FrontendCartViewSet
 from .views.orders import FrontendOrderViewSet
 from .views.reports import ActReconciliationView
+from .views.telegram_bot import TelegramWebhookView
 
 router = SimpleRouter()
 router.register('categories', FrontendCategoryViewSet, basename='front-categories')
@@ -20,4 +21,7 @@ urlpatterns = [
     path('auth/telegram/', TelegramAuthView.as_view(), name='frontend_login'),
 
     path('reports/act/', ActReconciliationView.as_view(), name='frontend_act'),
+
+    # Вебхук Telegram-бота филиала (регистрируется командой set_telegram_webhook)
+    path('telegram/webhook/', TelegramWebhookView.as_view(), name='frontend_telegram_webhook'),
 ]

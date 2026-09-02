@@ -206,6 +206,14 @@ else:
 # Время жизни кэша каталога (сек). Инвалидация мгновенная — по версии на организацию.
 CATALOG_CACHE_TTL = int(os.getenv("CATALOG_CACHE_TTL", "300"))
 
+# --- Telegram-бот филиалов ---
+# Базовый URL WebApp, который открывают кнопки бота ({prefix} -> Organization.prefix).
+TELEGRAM_WEBAPP_URL_TEMPLATE = os.getenv("TELEGRAM_WEBAPP_URL_TEMPLATE", "https://{prefix}.qarshi1s.uz")
+# Базовый URL для регистрации вебхука (manage.py set_telegram_webhook).
+# Пусто -> для каждого филиала берётся его собственный домен из шаблона выше.
+# Локально удобно указать ngrok-туннель: https://xxxx.ngrok-free.app
+TELEGRAM_WEBHOOK_BASE_URL = os.getenv("TELEGRAM_WEBHOOK_BASE_URL", "")
+
 # Настройки времени жизни JWT токенов
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(days=1),     # Access токен будет жить 1 день

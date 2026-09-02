@@ -1,5 +1,4 @@
 import json
-import secrets
 import urllib
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
@@ -11,6 +10,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from django.db import transaction
 from front_api.models import TelegramAccount
 from front_api.views.base import BaseFrontendAPIView
+from front_api.bot.accounts import ensure_profile, upsert_telegram_account
 from front_api.utils import normalize_phone, verify_telegram_webapp_data
 
 
@@ -41,65 +41,11 @@ class TelegramAuthView(BaseFrontendAPIView):
                 "message": "Не удалось подтвердить подпись Telegram. Проверьте настройку telegram_bot_token у организации."
             }, status=status.HTTP_403_FORBIDDEN)
 
-        tg_id = user_data.get('id')
-        tg_username = user_data.get('username', '')
-        tg_first_name = user_data.get('first_name', '')
-        tg_last_name = user_data.get('last_name', '')
-        tg_photo_url = user_data.get('photo_url', '')
-        tg_language_code = user_data.get('language_code', 'ru')
-
-        # 3. ШАГ №1: Ищем глобальный аккаунт Телеграма по уникальному telegram_id
-        tg_account = TelegramAccount.objects.filter(telegram_id=tg_id).select_related('user').first()
-        has_critical_changes = False
-        # --- СЦЕНАРИЙ А: Глобальный аккаунт заходит впервые (РЕГИСТРАЦИЯ) ---
+        # 3. ШАГ №1: глобальный TelegramAccount по telegram_id — создаём при первом
+        # входе, иначе синхронизируем данные из Telegram. Та же логика используется
+        # вебхуком бота (front_api/bot/accounts.py), поэтому вынесена в общий хелпер.
         try:
-            if not tg_account:
-                # if not raw_phone:
-                #     # Если телефона нет, отправляем сигнал во Flutter запросить контакт кнопкой
-                #     return Response({
-                #         "ok": True,
-                #         "requires_phone": True,
-                #         "message": "Для регистрации в b2b-системе необходим номер телефона."
-                #     }, status=status.HTTP_200_OK)
-
-                with transaction.atomic():
-                    # Создаем системного пользователя Django
-                    system_username = f"tg_{tg_id}"
-                    user = User.objects.create_user(
-                        username=system_username,
-                        password=secrets.token_urlsafe(16),
-                        first_name=tg_first_name,
-                        last_name=tg_last_name
-                    )
-                    # Создаем глобальную карточку ТГ-аккаунта
-                    tg_account = TelegramAccount.objects.create(
-                        user=user,
-                        phone=raw_phone,
-                        telegram_id=tg_id,
-                        telegram_username=tg_username,
-                        tg_first_name=tg_first_name,
-                        tg_last_name=tg_last_name,
-                        tg_photo_url=tg_photo_url,
-                        tg_language_code=tg_language_code
-                    )
-
-            # --- СЦЕНАРИЙ Б: Пользователь уже существует (СИНХРОНИЗАЦИЯ ДАННЫХ) ---
-            else:
-                # Отслеживаем, изменил ли пользователь ник или телефон в самом Telegram
-                if tg_account.telegram_username != tg_username:
-                    tg_account.telegram_username = tg_username
-                    has_critical_changes = True
-
-                if raw_phone and tg_account.phone != raw_phone:
-                    tg_account.phone = raw_phone
-                    has_critical_changes = True
-
-                # Технические данные (аватарку, имя) обновляем всегда без изменения статусов
-                tg_account.tg_first_name = tg_first_name
-                tg_account.tg_last_name = tg_last_name
-                tg_account.tg_photo_url = tg_photo_url
-                tg_account.tg_language_code = tg_language_code
-                tg_account.save()
+            tg_account = upsert_telegram_account(user_data, phone=raw_phone)
         except Exception as parse_err:
             print(f"Критическая ошибка при создании аккаунта: {str(parse_err)}")
             return Response({
@@ -108,20 +54,9 @@ class TelegramAuthView(BaseFrontendAPIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         # 4. ШАГ №2: B2B-профиль для ТЕКУЩЕЙ ОРГАНИЗАЦИИ.
+        # При первом входе создаётся с видом цены по умолчанию (is_default=True).
         user = tg_account.user
-
-        # При первом входе создаём профиль контрагента для этой организации:
-        # user, организация, вид цены по умолчанию (is_default=True), is_blocked=False.
-        default_pt = self.current_organization.default_price_type
-        profile = UserProfile.objects.filter(user=user, organization=self.current_organization).first()
-        if not profile and default_pt:
-            profile = UserProfile.objects.create(
-                user=user,
-                organization=self.current_organization,
-                price_type=default_pt,
-                name='',
-                is_blocked=False,
-            )
+        profile = ensure_profile(user, self.current_organization)
 
         # 5. ПРОВЕРКА СТАТУСА БЛОКИРОВКИ
         # Телефон поддержки филиала добавляем в текст, если он заполнен.
