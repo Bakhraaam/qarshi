@@ -46,6 +46,10 @@ class TelegramBotTests(TestCase):
         buttons = [button for row in keyboard for button in row]
         return payload["text"], buttons
 
+    def last_markup(self):
+        _, payload = self.sent[-1]
+        return payload.get("reply_markup", {})
+
     def contact(self, user_id=TG_ID, phone="+998 (90) 123-45-67"):
         return self.update(contact={"user_id": user_id, "phone_number": phone})
 
@@ -55,9 +59,9 @@ class TelegramBotTests(TestCase):
         text, buttons = self.last_message()
 
         self.assertIn("оптовый заказ через Telegram", text)
-        self.assertTrue(any(b.get("request_contact") for b in buttons))
-        # Телефон желателен, но не обязателен: каталог доступен сразу
-        self.assertTrue(any("web_app" in b for b in buttons))
+        # Единственная кнопка бота — запрос телефона, навигацию он не дублирует
+        self.assertEqual(len(buttons), 1)
+        self.assertTrue(buttons[0].get("request_contact"))
 
         account = TelegramAccount.objects.get(telegram_id=TG_ID)
         self.assertEqual(account.user.username, f"tg_{TG_ID}")
@@ -72,7 +76,9 @@ class TelegramBotTests(TestCase):
         self.assertIn("заявка передана менеджеру", text)
         self.assertIn("Вы ещё не подтверждены как контрагент.", text)
         self.assertIn("+998901234567", text.split("Вопросы: ")[-1])
-        self.assertFalse(any(b.get("request_contact") for b in buttons))
+        # Номер получен — клавиатура с запросом телефона убирается
+        self.assertEqual(buttons, [])
+        self.assertTrue(self.last_markup().get("remove_keyboard"))
 
     def test_linked_partner_gets_contract_price_message(self):
         handlers.handle_update(self.org, self.update(text="/start"))
@@ -95,14 +101,14 @@ class TelegramBotTests(TestCase):
         self.assertTrue(any(b.get("request_contact") for b in buttons))
         self.assertFalse(TelegramAccount.objects.get(telegram_id=TG_ID).phone)
 
-    def test_start_with_known_phone_shows_navigation(self):
+    def test_start_with_known_phone_has_no_keyboard(self):
         handlers.handle_update(self.org, self.contact())
         handlers.handle_update(self.org, self.update(text="/start"))
         text, buttons = self.last_message()
 
         self.assertIn("Вы авторизованы как Иван", text)
-        self.assertEqual(len(buttons), 2)
-        self.assertFalse(any(b.get("request_contact") for b in buttons))
+        self.assertEqual(buttons, [])
+        self.assertTrue(self.last_markup().get("remove_keyboard"))
 
     def test_free_text_reminds_about_button(self):
         handlers.handle_update(self.org, self.update(text="привет"))
@@ -114,7 +120,7 @@ class TelegramBotTests(TestCase):
         handlers.handle_update(self.org, self.update(text="а есть масло 5w30?"))
         text, buttons = self.last_message()
         self.assertIn("внутри приложения", text)
-        self.assertFalse(any(b.get("request_contact") for b in buttons))
+        self.assertEqual(buttons, [])
 
     def test_blocked_profile_gets_support_phone(self):
         handlers.handle_update(self.org, self.update(text="/start"))

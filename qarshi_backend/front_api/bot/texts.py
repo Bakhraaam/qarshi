@@ -6,8 +6,6 @@
 """
 
 BTN_SHARE_PHONE = "📱 Отправить номер телефона"
-BTN_CATALOG = "🛒 Открыть каталог"
-BTN_ORDERS = "📄 Мои заказы"
 
 
 def _join(*parts) -> str:
@@ -30,16 +28,13 @@ def start_no_phone(organization) -> str:
         "Оставьте номер телефона: по нему менеджер найдёт вас среди контрагентов "
         "и откроет оптовые цены. Нажмите кнопку ниже — Telegram отправит номер, "
         "вводить вручную не нужно.",
-
-        "Каталог можно открыть и сейчас, без номера.",
     )
 
 
 def start_with_phone(organization, first_name: str) -> str:
     """/start, телефон уже есть."""
     who = (first_name or "").strip()
-    head = f"{organization.name}. Вы авторизованы как {who}." if who else f"{organization.name}. Вы авторизованы."
-    return _join(head, "Каталог и заказы — на кнопках ниже.")
+    return f"{organization.name}. Вы авторизованы как {who}." if who else f"{organization.name}. Вы авторизованы."
 
 
 def contact_linked(phone: str, partner_name: str) -> str:
@@ -74,7 +69,7 @@ def text_instead_of_button() -> str:
 
 def hint_use_buttons() -> str:
     """Пользователь с телефоном написал что-то боту."""
-    return "Заказы и переписка с менеджером — внутри приложения. Откройте его кнопкой ниже."
+    return "Заказы и переписка с менеджером — внутри приложения."
 
 
 def foreign_contact() -> str:

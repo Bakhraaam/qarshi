@@ -64,13 +64,14 @@ so no extra DB field and nothing to sync with 1C. Anything other than a bad secr
 Telegram must not retry what we cannot process.
 
 - `bot/texts.py` — all wording (business tone, ru only). Edit texts here, never in handlers.
-- `bot/api.py` — Bot API client on stdlib `urllib` (no new dependency) + reply keyboards. Only reply keyboards are
-  used: a new one replaces the old, so the "share phone" button disappears by itself once the number arrives.
+- `bot/api.py` — Bot API client on stdlib `urllib` (no new dependency) + the one keyboard. The bot deliberately does
+  **not** duplicate in-app navigation: its only button is the contact request, removed once the number arrives.
+  The Mini App is opened by Telegram's own entry points (menu button / "Open" on the bot), not by bot buttons.
 - `bot/handlers.py` — `/start`, contact, foreign contact, free text, blocked access.
 - `bot/accounts.py` — shared with `TelegramAuthView`.
 
-Phone is **requested, not required**: the catalog WebApp button sits next to the contact button, and nothing in the
-WebApp gates on `TelegramAccount.phone`. There is no way to match a phone to a 1C counterparty on the backend —
+Phone is **requested, not required**: nothing in the WebApp gates on `TelegramAccount.phone`, the bot just asks once.
+There is no way to match a phone to a 1C counterparty on the backend —
 `UserProfile` has no phone field — so after a contact arrives the bot only promises "передано менеджеру"; the real
 link appears when 1C fills `guid_partner1c`.
 

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
 import 'package:qarshi/core/data/api/api_django.dart';
+import 'package:qarshi/core/utils/telegram_launch.dart';
 import 'package:telegram_web_app/telegram_web_app.dart';
 import '../../core/data/api/api_django.dart';
 import 'dart:ui';
@@ -52,14 +53,16 @@ class _TelegramWebAppAuthScreenState extends State<TelegramWebAppAuthScreen>
         } catch (_) {
           // Старые клиенты Telegram (Bot API < 7.7) метод не поддерживают — не критично.
         }
-        // Открываем на весь экран (Bot API 8.0+). На старых клиентах — no-op.
-        try {
-          TelegramWebApp.instance.requestFullscreen();
-        } catch (_) {}
-
-        // Даём переходу в fullscreen (особенно на десктопе) устаканиться до
-        // навигации/авторизации — иначе на десктопе экран подвисал.
-        await Future.delayed(const Duration(milliseconds: 400));
+        // Полноэкранный режим (Bot API 8.0+) просим только на мобильных клиентах.
+        // На десктопе он менял размер контейнера уже после старта отрисовки, и
+        // Flutter застывал кадром прежнего маленького размера.
+        if (shouldRequestFullscreen()) {
+          try {
+            TelegramWebApp.instance.requestFullscreen();
+          } catch (_) {}
+          // Даём анимации перехода устаканиться до навигации/авторизации.
+          await Future.delayed(const Duration(milliseconds: 400));
+        }
         if (!mounted) return;
 
         final String initData = TelegramWebApp.instance.initData.raw;

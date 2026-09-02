@@ -29,7 +29,7 @@ def webhook_secret(org_prefix: str) -> str:
 
 
 def webapp_base_url(organization) -> str:
-    """Базовый URL WebApp филиала (кнопки бота открывают его же)."""
+    """Базовый URL филиала: домен его WebApp, он же адрес для вебхука по умолчанию."""
     template = getattr(settings, "TELEGRAM_WEBAPP_URL_TEMPLATE", "https://{prefix}.qarshi1s.uz")
     return template.format(prefix=organization.prefix or "").rstrip("/")
 
@@ -75,29 +75,13 @@ def send_message(token: str, chat_id: int, text: str, reply_markup: dict | None 
 
 
 # --- Клавиатуры ---
-# Используем только reply-клавиатуру: она остаётся на экране и заменяет предыдущую,
-# поэтому кнопка «Отправить номер» сама исчезает после того, как номер получен.
+# Бот не дублирует навигацию приложения: единственная кнопка — запрос телефона,
+# после его получения клавиатура убирается. WebApp открывается штатными
+# средствами Telegram (menu-кнопка / кнопка «Открыть» у бота).
 
 def keyboard_ask_phone(organization) -> dict:
-    """Просим номер, но каталог доступен рядом — телефон не является пропуском."""
-    base = webapp_base_url(organization)
     return {
-        "keyboard": [
-            [{"text": texts.BTN_SHARE_PHONE, "request_contact": True}],
-            [{"text": texts.BTN_CATALOG, "web_app": {"url": f"{base}/catalog"}}],
-        ],
-        "resize_keyboard": True,
-        "is_persistent": True,
-    }
-
-
-def keyboard_main(organization) -> dict:
-    base = webapp_base_url(organization)
-    return {
-        "keyboard": [[
-            {"text": texts.BTN_CATALOG, "web_app": {"url": f"{base}/catalog"}},
-            {"text": texts.BTN_ORDERS, "web_app": {"url": f"{base}/orders"}},
-        ]],
+        "keyboard": [[{"text": texts.BTN_SHARE_PHONE, "request_contact": True}]],
         "resize_keyboard": True,
         "is_persistent": True,
     }

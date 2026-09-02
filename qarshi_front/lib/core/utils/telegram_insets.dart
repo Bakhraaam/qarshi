@@ -1,5 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:telegram_web_app/telegram_web_app.dart';
+// Условный импорт: на web — package:web (совместим с --wasm), на остальных
+// платформах — заглушка, чтобы сборка под мобилки/десктоп не падала.
+import 'host/host_stub.dart' if (dart.library.js_interop) 'host/host_web.dart';
 
 /// Верхний отступ, который в fullscreen-режиме занимают системные элементы
 /// (нотч/статус-бар) и нативные кнопки Telegram (закрыть, «···»).
@@ -12,8 +17,29 @@ final ValueNotifier<double> telegramBottomInset = ValueNotifier<double>(0);
 
 bool _initialized = false;
 
-/// Подписывается на изменения safe-area/fullscreen Telegram и держит
-/// [telegramTopInset] актуальным. Безопасно вне Telegram (no-op).
+/// Задержки, на которых повторяем пересчёт размера после изменения вьюпорта.
+/// Анимация разворачивания в клиентах Telegram длится до ~600 мс, а событие
+/// приходит в её начале — одного пересчёта не хватает.
+const List<Duration> _relayoutDelays = [
+  Duration(milliseconds: 50),
+  Duration(milliseconds: 250),
+  Duration(milliseconds: 600),
+  Duration(milliseconds: 1000),
+];
+
+/// Просит Flutter перемерить вьюпорт: сразу и несколько раз по ходу анимации.
+/// Без этого на десктопе после перехода в fullscreen остаётся застывший кадр
+/// прежнего (маленького) размера.
+void _relayout() {
+  dispatchWindowResize();
+  for (final delay in _relayoutDelays) {
+    Timer(delay, dispatchWindowResize);
+  }
+}
+
+/// Подписывается на изменения safe-area/fullscreen/вьюпорта Telegram: держит
+/// [telegramTopInset] актуальным и не даёт Flutter застрять на старом размере.
+/// Безопасно вне Telegram (no-op).
 void initTelegramInsets() {
   if (_initialized) return;
   _initialized = true;
@@ -35,8 +61,17 @@ void initTelegramInsets() {
     refresh();
     tg.onEvent(SafeAreaChangedEvent(refresh));
     tg.onEvent(ContentSafeAreaChangedEvent(refresh));
-    tg.onEvent(FullscreenChangedEvent(refresh));
+    tg.onEvent(FullscreenChangedEvent(() {
+      refresh();
+      _relayout();
+    }));
+    // Приходит и при разворачивании/сворачивании окна, и по ходу анимации
+    // (isStateStable == false), и по её завершении.
+    tg.onEvent(ViewportChangedEvent((payload) {
+      refresh();
+      _relayout();
+    }));
   } catch (_) {
-    // Старые клиенты Telegram (Bot API < 8.0) — insets недоступны, не критично.
+    // Старые клиенты Telegram (Bot API < 8.0) — события недоступны, не критично.
   }
 }

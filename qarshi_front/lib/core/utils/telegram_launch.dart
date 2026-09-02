@@ -14,3 +14,18 @@ bool isRunningInTelegram() {
     return false;
   }
 }
+
+/// Мобильные клиенты Telegram, где полноэкранный режим (Bot API 8.0) уместен.
+/// Остальные значения `platform` — 'tdesktop', 'macos', 'linux', 'weba', 'webk',
+/// 'unknown': там окно Mini App и так крупное, а запрос fullscreen лишь меняет
+/// размер контейнера на лету и роняет отрисовку Flutter.
+const Set<String> _mobilePlatforms = {'android', 'ios'};
+
+/// Стоит ли просить полноэкранный режим на текущем клиенте.
+bool shouldRequestFullscreen() {
+  try {
+    return _mobilePlatforms.contains(TelegramWebApp.instance.platform);
+  } catch (_) {
+    return false;
+  }
+}

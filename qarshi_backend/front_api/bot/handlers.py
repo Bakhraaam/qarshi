@@ -52,7 +52,7 @@ def handle_update(organization, update: dict) -> None:
 
     # Любое другое сообщение: бот не ведёт переписку, всё общение — в приложении
     if account.phone:
-        api.send_message(token, chat_id, texts.hint_use_buttons(), api.keyboard_main(organization))
+        api.send_message(token, chat_id, texts.hint_use_buttons(), api.keyboard_remove())
     else:
         api.send_message(token, chat_id, texts.text_instead_of_button(), api.keyboard_ask_phone(organization))
 
@@ -63,7 +63,7 @@ def _handle_start(organization, chat_id, account) -> None:
         api.send_message(
             token, chat_id,
             texts.start_with_phone(organization, account.tg_first_name),
-            api.keyboard_main(organization),
+            api.keyboard_remove(),
         )
     else:
         api.send_message(
@@ -97,4 +97,4 @@ def _handle_contact(organization, chat_id, account, profile, tg_user, contact: d
     else:
         message_text = texts.contact_unlinked(organization, phone)
 
-    api.send_message(token, chat_id, message_text, api.keyboard_main(organization))
+    api.send_message(token, chat_id, message_text, api.keyboard_remove())
