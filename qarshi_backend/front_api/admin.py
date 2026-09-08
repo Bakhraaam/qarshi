@@ -6,19 +6,46 @@ from django.utils.html import format_html
 @admin.register(CartItem)
 class CartItemAdmin(admin.ModelAdmin):
     # Колонки, которые будут видны в общей таблице списка корзин
-    list_display = ['id', 'user', 'item', 'organization', 'quantity', 'updated_at']
+    list_display = ['organization', 'user', 'client', 'item_articul', 'item',
+                    'quantity', 'unit', 'updated_at']
+    list_display_links = ['item']
 
     # Удобные фильтры справа (можно сразу посмотреть корзины конкретного филиала)
     list_filter = ['organization', 'created_at', 'updated_at']
 
     # Быстрый поиск по имени/логину юзера, названию товара или его артикулу
-    search_fields = ['user__username', 'user__first_name', 'item__name', 'item__articul']
+    search_fields = ['user__username', 'user__first_name', 'item__name',
+                     'item__articul', 'item__code']
 
     # Поля, доступные только для чтения (чтобы админы случайно не меняли корзины юзеров вручную)
     readonly_fields = ['created_at', 'updated_at']
 
     # Оптимизация SQL-запросов, чтобы админка не тормозила при тысячах товаров
     raw_id_fields = ['user', 'item']
+    list_select_related = ['user', 'item', 'organization']
+    ordering = ['-updated_at']
+    list_per_page = 50
+
+    def get_queryset(self, request):
+        # Колонка «Контрагент» иначе делает запрос на каждую строку списка
+        return super().get_queryset(request).prefetch_related('user__profile')
+
+    @admin.display(description="Контрагент")
+    def client(self, obj):
+        # Читаем из prefetch: .filter() по связи сбросил бы кэш и дал запрос на строку
+        profile = next(
+            (p for p in obj.user.profile.all() if p.organization_id == obj.organization_id),
+            None,
+        )
+        return profile.name if profile and profile.name else "—"
+
+    @admin.display(description="Артикул", ordering='item__articul')
+    def item_articul(self, obj):
+        return obj.item.articul or obj.item.code or "—"
+
+    @admin.display(description="Ед. изм.")
+    def unit(self, obj):
+        return obj.item.unit or "—"
 
 
 @admin.register(TelegramAccount)
@@ -32,6 +59,7 @@ class TelegramAccountAdmin(admin.ModelAdmin):
         'tg_first_name',
         'tg_last_name',
         'tg_language_code',
+        'organizations',
         'created_at'
     )
 
@@ -41,8 +69,10 @@ class TelegramAccountAdmin(admin.ModelAdmin):
     # 🔍 Живой поиск по основным текстовым и числовым полям
     search_fields = ('telegram_id', 'telegram_username', 'phone', 'tg_first_name', 'tg_last_name')
 
-    # ⏳ Правый блок фильтрации данных
-    list_filter = ('tg_language_code', 'created_at')
+    # ⏳ Правый блок фильтрации данных.
+    # У самого аккаунта организации нет — она приходит из профиля контрагента,
+    # поэтому фильтруем через связь user → profile → organization.
+    list_filter = ('user__profile__organization', 'tg_language_code', 'created_at')
 
     # 🔒 Поля, которые нельзя редактировать вручную (Django управляет ими сам)
     readonly_fields = ('created_at', 'updated_at', 'avatar_large_preview')
@@ -66,6 +96,20 @@ class TelegramAccountAdmin(admin.ModelAdmin):
             'classes': ('collapse',),  # Блок скрыт по умолчанию, разворачивается по клику
         }),
     )
+
+    def get_queryset(self, request):
+        # distinct — фильтр по организации идёт через обратную связь (профили),
+        # без него аккаунт с несколькими профилями задвоился бы в списке.
+        return super().get_queryset(request) \
+            .select_related('user') \
+            .prefetch_related('user__profile__organization') \
+            .distinct()
+
+    @admin.display(description="Филиалы")
+    def organizations(self, obj):
+        # Один Telegram-аккаунт может быть заведён в нескольких филиалах
+        names = sorted({p.organization.name for p in obj.user.profile.all()})
+        return ", ".join(names) if names else "—"
 
     def avatar_preview(self, obj):
         """Создает круглую мини-аватарку в общем списке пользователей"""

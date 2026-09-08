@@ -195,6 +195,9 @@ class Product {
 
   final String articul;
   final String imageUrl;
+
+  /// Все картинки товара с бэкенда (первая — главная). Пустой список = картинок нет.
+  final List<String> images;
   final String categoryId;
   final String categoryName;
 
@@ -212,20 +215,34 @@ class Product {
     required this.categoryName,
     required this.unit,
     required this.stock,
+    this.images = const [],
   });
+
+  /// Картинки для галереи: список с бэкенда, а если он пуст — одна главная картинка.
+  List<String> get gallery {
+    if (images.isNotEmpty) return images;
+    return imageUrl.isEmpty ? const [] : [imageUrl];
+  }
 
   factory Product.fromJson(Map<String, dynamic> json) {
     // print(json);
+    final rawImages = json['images'];
     return Product(
       id: json['id'].toString(),
       name: json['name'] ?? '',
       price: double.tryParse(json['price'].toString()) ?? 0.0,
       imageUrl: json['image_url'] ?? '', // Фолбэк, если картинки нет
-      categoryId: json['category_id'].toString(),
+      images: rawImages is List
+          ? rawImages
+                .where((e) => e != null && e.toString().isNotEmpty)
+                .map((e) => e.toString())
+                .toList()
+          : const [],
+      categoryId: json['category_id']?.toString() ?? '',
       // stock: double.tryParse(json['stock'].toString()) ?? 0.0,
-      categoryName: json['category_name'],
-      articul: json['articul'],
-      unit: json['unit'],
+      categoryName: json['category_name']?.toString() ?? '',
+      articul: json['articul']?.toString() ?? '',
+      unit: json['unit']?.toString() ?? '',
       stock: json['stock'] ?? 0,
     );
   }

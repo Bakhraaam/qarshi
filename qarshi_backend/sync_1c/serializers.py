@@ -29,7 +29,7 @@ class ItemSyncSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Item
-        fields = ['id', 'item_type', 'articul', 'code', 'name', 'unit', 'images']
+        fields = ['id', 'item_type', 'articul', 'code', 'name', 'unit', 'is_invalid', 'images']
 
     def validate_item_type(self, value):
         """

@@ -17,7 +17,7 @@ from sync_1c.models import Item, ItemType
 from front_api.serializers.catalog import (
     FrontendCategorySerializer,
     FrontendProductListSerializer,
-    # FrontendProductDetailSerializer
+    FrontendProductDetailSerializer,
 )
 from front_api.views.base import BaseFrontendReadOnlyModelViewSet
 from front_api.cache import get_catalog_version
@@ -84,8 +84,18 @@ class FrontendProductViewSet(BaseFrontendReadOnlyModelViewSet):
         return self.current_organization.default_price_type
 
     def get_queryset(self):
+        # На сайте показываем только товары, которые реально можно заказать:
+        #  * не помечены в 1С как недействительные (is_invalid);
+        #  * есть положительный остаток на складе этого филиала.
+        # Остаток хранится в ItemStock с unique (item, organization), поэтому join
+        # не размножает строки и .distinct() здесь не нужен.
         # prefetch stocks добавлен: get_stock читает из памяти без N+1
-        queryset = Item.objects.filter(organization=self.current_organization) \
+        queryset = Item.objects.filter(
+            organization=self.current_organization,
+            is_invalid=False,
+            stocks__organization=self.current_organization,
+            stocks__stock__gt=0,
+        ) \
             .select_related('item_type') \
             .prefetch_related('images', 'prices__price_type', 'stocks') \
             .order_by('name')
@@ -105,6 +115,10 @@ class FrontendProductViewSet(BaseFrontendReadOnlyModelViewSet):
         return queryset
 
     def get_serializer_class(self):
+        # Карточка товара (GET products/<id>/) отдаёт галерею картинок и все реквизиты,
+        # сетка каталога — облегчённый формат.
+        if self.action == 'retrieve':
+            return FrontendProductDetailSerializer
         return FrontendProductListSerializer
 
     def get_serializer_context(self):

@@ -88,6 +88,13 @@ class Item(models.Model):
         related_name='items',
         verbose_name="Организация"
     )
+    # Пометка «недействителен» (снят с продажи / помечен на удаление в 1С).
+    # Такой товар полностью скрыт из каталога сайта, но остаётся в базе ради истории заказов.
+    is_invalid = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name="Недействителен (не показывать на сайте)"
+    )
     updated_at = models.DateTimeField(auto_now=True, db_index=True, verbose_name="Дата последней синхронизации")
 
     class Meta:

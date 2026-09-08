@@ -8,10 +8,12 @@ import 'package:qarshi/core/data/api/api_django.dart';
 import 'package:qarshi/core/data/constants.dart';
 import 'package:qarshi/core/data/models.dart';
 import 'package:qarshi/core/utils/formatters.dart';
+import 'package:qarshi/presentations/screens/product_detail_screen.dart';
 import 'package:qarshi/presentations/widgets/filter_sheet.dart';
+import 'package:qarshi/presentations/widgets/product_cart_control.dart';
+import 'package:qarshi/presentations/widgets/product_gallery.dart';
 // import 'package:qarshi/core/utils/formatters.dart';
 // import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 class CatalogScreen extends StatefulWidget {
   final bool embedded;
@@ -477,17 +479,21 @@ class _CatalogScreenState extends State<CatalogScreen> {
     return LayoutBuilder(
       builder: (context, constraints) {
         const spacing = 12.0;
-        const minCardWidth = 330.0;
+        // Витрина: карточка вертикальная, картинка сверху. На телефоне помещаются
+        // две колонки, на широком экране их становится больше.
+        const minCardWidth = 170.0;
 
         int columns =
             ((constraints.maxWidth + spacing) / (minCardWidth + spacing))
                 .floor();
-        columns = columns.clamp(1, 4);
+        columns = columns.clamp(2, 6);
 
         final cardWidth =
             (constraints.maxWidth - spacing * (columns - 1)) / columns;
-        final compactCard = cardWidth < 380;
-        final cardHeight = compactCard ? 174.0 : 184.0;
+        final compactCard = cardWidth < 200;
+        // Картинка квадратная, под ней блок с ценой, названием и кнопкой.
+        final imageHeight = cardWidth;
+        final cardHeight = imageHeight + (compactCard ? 150.0 : 158.0);
 
         return GridView.builder(
           controller: _scrollController,
@@ -504,10 +510,19 @@ class _CatalogScreenState extends State<CatalogScreen> {
             final quantity = _cartQuantities[product.id] ?? 0;
 
             return _ProductCard(
+              // Ключ по товару: при смене фильтра/поиска сетка не переиспользует
+              // состояние галереи и счётчика от товара, стоявшего на этом месте.
+              key: ValueKey(product.id),
               product: product,
               quantity: quantity,
               compact: compactCard,
+              imageHeight: imageHeight,
               onQuantityChanged: (value) => _updateCartQuantity(product, value),
+              onOpenDetails: () => ProductDetailScreen.open(
+                context,
+                product: product,
+                onQuantityChanged: (value) => _updateCartQuantity(product, value),
+              ),
             );
           },
         );
@@ -516,120 +531,29 @@ class _CatalogScreenState extends State<CatalogScreen> {
   }
 }
 
-class _ProductCard extends StatefulWidget {
+/// Карточка товара в сетке каталога: картинка сверху (листается, если их несколько),
+/// под ней цена, название и кнопка добавления в корзину.
+/// Нажатие на картинку или название открывает подробную карточку товара.
+class _ProductCard extends StatelessWidget {
   final Product product;
   final num quantity;
   final bool compact;
+  final double imageHeight;
   final ValueChanged<num> onQuantityChanged;
+  final VoidCallback onOpenDetails;
 
   const _ProductCard({
+    super.key,
     required this.product,
     required this.quantity,
     required this.compact,
+    required this.imageHeight,
     required this.onQuantityChanged,
+    required this.onOpenDetails,
   });
 
   @override
-  State<_ProductCard> createState() => _ProductCardState();
-}
-
-class _ProductCardState extends State<_ProductCard> {
-  late final TextEditingController _quantityController;
-  late final FocusNode _quantityFocusNode;
-
-  bool _isEditingQuantity = false;
-
-  @override
-  void initState() {
-    super.initState();
-
-    _quantityController = TextEditingController(
-      text: _formatQuantity(widget.quantity),
-    );
-
-    _quantityFocusNode = FocusNode();
-    _quantityFocusNode.addListener(_handleQuantityFocus);
-  }
-
-  @override
-  void didUpdateWidget(covariant _ProductCard oldWidget) {
-    super.didUpdateWidget(oldWidget);
-
-    if (!_quantityFocusNode.hasFocus && oldWidget.quantity != widget.quantity) {
-      _quantityController.text = _formatQuantity(widget.quantity);
-    }
-  }
-
-  @override
-  void dispose() {
-    _quantityFocusNode.removeListener(_handleQuantityFocus);
-    _quantityFocusNode.dispose();
-    _quantityController.dispose();
-    super.dispose();
-  }
-
-  void _handleQuantityFocus() {
-    if (!_quantityFocusNode.hasFocus && _isEditingQuantity) {
-      _submitQuantity();
-    }
-
-    if (mounted) {
-      setState(() {
-        _isEditingQuantity = _quantityFocusNode.hasFocus;
-      });
-    }
-  }
-
-  void _startQuantityEditing() {
-    setState(() => _isEditingQuantity = true);
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-
-      _quantityFocusNode.requestFocus();
-      _quantityController.selection = TextSelection(
-        baseOffset: 0,
-        extentOffset: _quantityController.text.length,
-      );
-    });
-  }
-
-  void _submitQuantity() {
-    final normalized = _quantityController.text.trim().replaceAll(',', '.');
-
-    final parsed = num.tryParse(normalized);
-
-    if (parsed == null || parsed < 0) {
-      _quantityController.text = _formatQuantity(widget.quantity);
-      return;
-    }
-
-    final num value;
-
-    if (parsed is double && parsed == parsed.roundToDouble()) {
-      value = parsed.toInt();
-    } else {
-      value = parsed;
-    }
-
-    _quantityController.text = _formatQuantity(value);
-    widget.onQuantityChanged(value);
-  }
-
-  String _formatQuantity(num value) {
-    if (value == value.roundToDouble()) {
-      return value.toInt().toString();
-    }
-
-    return value.toString();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final product = widget.product;
-    final quantity = widget.quantity;
-    final imageWidth = widget.compact ? 108.0 : 124.0;
-
     return Card(
       margin: EdgeInsets.zero,
       elevation: 0,
@@ -639,58 +563,54 @@ class _ProductCardState extends State<_ProductCard> {
         borderRadius: BorderRadius.circular(12),
         side: const BorderSide(color: Color(0xFFE2E8F0)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: imageWidth,
-            height: double.infinity,
-            child: ColoredBox(
-              color: const Color(0xFFF8FAFC),
-              child: Image.network(
-                product.imageUrl,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) {
-                  return const Center(
-                    child: Icon(
-                      Icons.image_not_supported_rounded,
-                      color: Colors.grey,
-                    ),
-                  );
-                },
-              ),
+            height: imageHeight,
+            width: double.infinity,
+            child: ProductGallery(
+              images: product.gallery,
+              onTap: onOpenDetails,
             ),
           ),
           Expanded(
             child: Padding(
-              padding: const EdgeInsets.all(10),
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    product.name,
-                    maxLines: 2,
+                    formatPrice(product.price),
+                    maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      height: 1.2,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF0F172A),
+                    style: TextStyle(
+                      fontSize: compact ? 15 : 17,
+                      fontWeight: FontWeight.w800,
+                      color: const Color(0xFF0F172A),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: onOpenDetails,
+                    child: Text(
+                      product.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        height: 1.25,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF0F172A),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    product.categoryName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF64748B),
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
                     'Остаток: ${product.stock.toStringAsFixed(0)} '
-                    '${product.unit}',
+                    '${product.unit}'
+                    '${product.articul.isEmpty ? '' : ' · Арт.: ${product.articul}'}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -698,162 +618,17 @@ class _ProductCardState extends State<_ProductCard> {
                       color: Color(0xFF64748B),
                     ),
                   ),
-                  if (product.articul.isNotEmpty)
-                    Text(
-                      'Арт.: ${product.articul}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 10,
-                        color: Color(0xFF64748B),
-                      ),
-                    ),
                   const Spacer(),
-                  Text(
-                    formatPrice(product.price),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF0F172A),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 36,
-                    child: quantity == 0
-                        ? ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF2563EB),
-                              foregroundColor: Colors.white,
-                              elevation: 0,
-                              padding: EdgeInsets.zero,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                            onPressed: () {
-                              widget.onQuantityChanged(1);
-                            },
-                            child: const Text(
-                              'В корзину',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          )
-                        : Container(
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF1F5F9),
-                              borderRadius: BorderRadius.circular(8),
-                              border: _isEditingQuantity
-                                  ? Border.all(
-                                      color: const Color(0xFF2563EB),
-                                      width: 1.2,
-                                    )
-                                  : null,
-                            ),
-                            child: Row(
-                              children: [
-                                _CounterButton(
-                                  icon: Icons.remove,
-                                  onPressed: () {
-                                    widget.onQuantityChanged(quantity - 1);
-                                  },
-                                ),
-                                Expanded(
-                                  child: GestureDetector(
-                                    behavior: HitTestBehavior.opaque,
-                                    onTap: _startQuantityEditing,
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 3,
-                                      ),
-                                      child: _isEditingQuantity
-                                          ? TextField(
-                                              controller: _quantityController,
-                                              focusNode: _quantityFocusNode,
-                                              autofocus: true,
-                                              textAlign: TextAlign.center,
-                                              keyboardType:
-                                                  const TextInputType.numberWithOptions(
-                                                    decimal: true,
-                                                  ),
-                                              inputFormatters: [
-                                                FilteringTextInputFormatter.allow(
-                                                  RegExp(r'[0-9.,]'),
-                                                ),
-                                              ],
-                                              textInputAction:
-                                                  TextInputAction.done,
-                                              style: const TextStyle(
-                                                fontSize: 13,
-                                                fontWeight: FontWeight.w700,
-                                                color: Color(0xFF0F172A),
-                                              ),
-                                              decoration: const InputDecoration(
-                                                isDense: true,
-                                                border: InputBorder.none,
-                                                contentPadding: EdgeInsets.zero,
-                                              ),
-                                              onSubmitted: (_) {
-                                                _submitQuantity();
-                                                _quantityFocusNode.unfocus();
-                                              },
-                                            )
-                                          : Text(
-                                              '${_formatQuantity(quantity)} '
-                                              '${product.unit}',
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              textAlign: TextAlign.center,
-                                              style: const TextStyle(
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w700,
-                                                color: Color(0xFF0F172A),
-                                              ),
-                                            ),
-                                    ),
-                                  ),
-                                ),
-                                _CounterButton(
-                                  icon: Icons.add,
-                                  onPressed: () {
-                                    widget.onQuantityChanged(quantity + 1);
-                                  },
-                                ),
-                              ],
-                            ),
-                          ),
+                  ProductCartControl(
+                    product: product,
+                    quantity: quantity,
+                    onQuantityChanged: onQuantityChanged,
                   ),
                 ],
               ),
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _CounterButton extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onPressed;
-
-  const _CounterButton({required this.icon, required this.onPressed});
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 38,
-      height: 34,
-      child: IconButton(
-        padding: EdgeInsets.zero,
-        onPressed: onPressed,
-        icon: Icon(icon, size: 17, color: const Color(0xFF334155)),
       ),
     );
   }

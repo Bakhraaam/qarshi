@@ -33,6 +33,17 @@ def resolve_item_image_url(item, request=None):
     return None
 
 
+def resolve_item_image_urls(item, request=None):
+    """Все картинки товара в порядке модели (-is_main, created_at) — для галереи в карточке."""
+    urls = []
+    for img in item.images.all():
+        if not img.image_path:
+            continue
+        url = img.image_path.url
+        urls.append(request.build_absolute_uri(url) if request else url)
+    return urls
+
+
 def resolve_item_stock(item):
     """Остаток строго для организации товара (из подгруженных stocks, без новых запросов)."""
     for stock_record in item.stocks.all():
@@ -73,13 +84,16 @@ class FrontendProductListSerializer(serializers.ModelSerializer):
     category_id = serializers.SerializerMethodField()
     category_name = serializers.SerializerMethodField()
     image_url = serializers.SerializerMethodField()
+    # Полный список картинок: карточка каталога листает их прямо в сетке,
+    # экран товара показывает ту же галерею без дополнительного запроса.
+    images = serializers.SerializerMethodField()
     price = serializers.SerializerMethodField()
     stock = serializers.SerializerMethodField()
 
     class Meta:
         model = Item
         fields = ['id', 'articul', 'code', 'name', 'unit', 'category_id', 'category_name',
-                  'image_url', 'price', 'stock']
+                  'image_url', 'images', 'price', 'stock']
 
     def get_category_id(self, obj):
         # Безопасно проверяем: если связь есть — возвращаем строковый UUID, если нет — null
@@ -92,6 +106,9 @@ class FrontendProductListSerializer(serializers.ModelSerializer):
     def get_image_url(self, obj):
         return resolve_item_image_url(obj, self.context.get('request'))
 
+    def get_images(self, obj):
+        return resolve_item_image_urls(obj, self.context.get('request'))
+
     def get_price(self, obj):
         # Нужный вид цены (B2B под пользователя или розница филиала) вьюха резолвит ОДИН раз
         # и кладёт в контекст как price_type_id — здесь только выбираем из памяти.
@@ -99,3 +116,18 @@ class FrontendProductListSerializer(serializers.ModelSerializer):
 
     def get_stock(self, obj):
         return resolve_item_stock(obj)
+
+
+class FrontendProductDetailSerializer(FrontendProductListSerializer):
+    """Карточка товара (GET products/<id>/): то же, что в сетке, плюс валюта цены."""
+    currency = serializers.SerializerMethodField()
+
+    class Meta(FrontendProductListSerializer.Meta):
+        fields = FrontendProductListSerializer.Meta.fields + ['currency']
+
+    def get_currency(self, obj):
+        price_type_id = self.context.get('price_type_id')
+        for p in obj.prices.all():
+            if p.price_type and str(p.price_type_id) == str(price_type_id):
+                return p.price_type.currency
+        return ''

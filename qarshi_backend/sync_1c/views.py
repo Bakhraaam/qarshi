@@ -107,6 +107,18 @@ class Sync1cUpdateOrganizationsView(Base1cAPIView):
         )
 
 
+def parse_1c_bool(value):
+    """Булево из 1С: она шлёт то true/false, то 1/0, то строку («Истина», «true», «да»).
+    Всё, что не распознано (в том числе None — ключа нет), считаем False."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ('true', '1', 'да', 'истина', 'yes')
+    return False
+
+
 class Sync1cUpdateItemsView(Base1cAPIView):
 
     def post(self, request):
@@ -159,7 +171,10 @@ class Sync1cUpdateItemsView(Base1cAPIView):
                     code=item_row.get("code"),
                     name=item_row.get("name", ""),
                     unit=item_row.get("unit"),
-                    organization_id=org_id
+                    organization_id=org_id,
+                    # 1С может прислать булево, число или строку ("true"/"Истина"/"1") —
+                    # приводим к bool. Ключа нет → товар считаем действительным.
+                    is_invalid=parse_1c_bool(item_row.get("is_invalid")),
                 )
             )
 
@@ -186,7 +201,8 @@ class Sync1cUpdateItemsView(Base1cAPIView):
                     Item.objects.bulk_create(
                         items_to_upsert, update_conflicts=True,
                         unique_fields=['id'],
-                        update_fields=['item_type_id', 'articul', 'code', 'name', 'unit', 'organization_id', 'updated_at'],
+                        update_fields=['item_type_id', 'articul', 'code', 'name', 'unit', 'organization_id',
+                                       'is_invalid', 'updated_at'],
                         batch_size=SYNC_BATCH_SIZE,
                     )
 
