@@ -65,6 +65,15 @@ class ItemType(models.Model):
         verbose_name="Организация"
     )
 
+    # Пометка «недействителен» (снята с продажи / помечена на удаление в 1С).
+    # Такая категория скрыта из каталога сайта вместе со всеми своими товарами,
+    # но остаётся в базе ради истории заказов.
+    is_invalid = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name="Недействителен (не показывать на сайте)"
+    )
+
     class Meta:
         verbose_name = "Вид номенклатуры"
         verbose_name_plural = "Виды номенклатуры"

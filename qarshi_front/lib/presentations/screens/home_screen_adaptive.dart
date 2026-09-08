@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:qarshi/core/data/api/api_django.dart';
+import 'package:qarshi/core/data/app_version.dart';
 import 'package:qarshi/core/data/constants.dart';
 import 'package:qarshi/core/data/models.dart';
 import 'package:qarshi/core/utils/formatters.dart';
@@ -339,6 +340,18 @@ class _MobileHome extends StatelessWidget {
                 );
               },
             ),
+
+            // --- ВЕРСИЯ СБОРКИ (в самом низу) ---
+            // По ней видно, какая сборка реально открыта у пользователя:
+            // Telegram и браузер умеют держать старую версию из кэша.
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+              child: SelectableText(
+                appVersionLabel,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+              ),
+            ),
           ],
         ),
       ),
@@ -608,6 +621,18 @@ class _DesktopSidebar extends StatelessWidget {
               );
             },
           ),
+
+          // Версия сборки — та же строка, что и в мобильном меню.
+          // На широком экране drawer'а нет, а знать версию нужно и здесь.
+          // В узком сайдбаре строка не поместится, поэтому её прячем.
+          if (!compact)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+              child: SelectableText(
+                appVersionLabel,
+                style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+              ),
+            ),
         ],
       ),
     );

@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Сборка веб-версии и выгрузка её в GitHub Release с тегом web-build.
+# Запуск:  bash ~/full_stack/qarshi/qarshi_front/scripts
+#
+# set -e обязателен: без него неудачная команда молча пропускается,
+# и наверх уезжает архив от предыдущей сборки.
+set -euo pipefail
+
+cd ~/full_stack/qarshi/qarshi_front
+
+# build/web не очищается автоматически — чистим сами, иначе в архив
+# попадают файлы от прошлых сборок
+rm -rf build/web
+
+# Версия для строки в меню приложения: номер из pubspec + хэш коммита и время
+# сборки. Меняется при каждой выкладке, поэтому по ней сразу видно,
+# открыта у пользователя свежая версия или он смотрит старую из кэша.
+APP_VERSION=$(awk '/^version:/ {print $2; exit}' pubspec.yaml)
+APP_BUILD="$(git rev-parse --short HEAD)-$(date +%y%m%d-%H%M)"
+echo "Собираю версию: $APP_VERSION · $APP_BUILD"
+
+flutter build web --wasm \
+  --dart-define=APP_VERSION="$APP_VERSION" \
+  --dart-define=APP_BUILD="$APP_BUILD"
+
+find build/web -name .DS_Store -delete
+rm -f build/web/flutter_service_worker.js
+
+tar -czf ~/qarshi-web.tar.gz -C build/web .
+
+# Проверяем, что в архиве действительно лежит собранное приложение
+for f in ./index.html ./main.dart.wasm ./main.dart.js; do
+  tar -tzf ~/qarshi-web.tar.gz | grep -qx "$f" || { echo "СТОП: в архиве нет $f"; exit 1; }
+done
+
+gh release upload web-build ~/qarshi-web.tar.gz -R Bakhraaam/qarshi --clobber
+
+echo
+echo "Выгружено."
+echo "  версия в приложении: $APP_VERSION · $APP_BUILD"
+echo "  хэш main.dart.wasm:  $(shasum -a 256 build/web/main.dart.wasm | cut -c1-16)"

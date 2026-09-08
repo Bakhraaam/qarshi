@@ -267,7 +267,13 @@ class Sync1cUpdateItemTypesView(Base1cAPIView):
                 skipped += 1
                 continue
             types_to_upsert.append(
-                ItemType(id=t.get("id"), name=t.get("name", ""), organization_id=org_id)
+                ItemType(
+                    id=t.get("id"),
+                    name=t.get("name", ""),
+                    organization_id=org_id,
+                    # Ключа нет → категория считается действительной (обратная совместимость)
+                    is_invalid=parse_1c_bool(t.get("is_invalid")),
+                )
             )
 
         try:
@@ -277,7 +283,8 @@ class Sync1cUpdateItemTypesView(Base1cAPIView):
                         types_to_upsert,
                         update_conflicts=True,
                         unique_fields=['id'],  # ИСПРАВЛЕНО: ищем конфликт строго по первичному ключу id
-                        update_fields=['name', 'organization_id'],  # Обновляем, если изменилось имя или фирма
+                        # Обновляем, если изменилось имя, фирма или пометка недействительности
+                        update_fields=['name', 'organization_id', 'is_invalid'],
                         batch_size=SYNC_BATCH_SIZE,
                     )
         except IntegrityError:

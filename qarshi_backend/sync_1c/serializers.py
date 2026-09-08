@@ -14,7 +14,7 @@ class OrganizationSyncSerializer(serializers.ModelSerializer):
 class ItemTypeSyncSerializer(serializers.ModelSerializer):
     class Meta:
         model = ItemType
-        fields = ['id', 'name']
+        fields = ['id', 'name', 'is_invalid']
 
 
 # 3. Сериализатор для Номенклатуры (Товаров)

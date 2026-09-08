@@ -89,10 +89,12 @@ class PriceListInline(admin.TabularInline):
 
 @admin.register(ItemType)
 class ItemTypeAdmin(admin.ModelAdmin):
-    list_display = ('name', 'organization', 'items_count', 'id')
+    list_display = ('name', 'organization', 'items_count', 'is_invalid', 'id')
     list_display_links = ('name',)
-    list_filter = ('organization',)
+    list_filter = ('organization', 'is_invalid')
     search_fields = ('name', 'id')
+    # Галочку «недействителен» можно переключать прямо из списка категорий
+    list_editable = ('is_invalid',)
     list_select_related = ('organization',)
     ordering = ('organization', 'name')
     list_per_page = 50
@@ -103,6 +105,12 @@ class ItemTypeAdmin(admin.ModelAdmin):
     @admin.display(description="Товаров", ordering='_items_count')
     def items_count(self, obj):
         return obj._items_count
+
+    def save_model(self, request, obj, form, change):
+        # Скрытая категория убирает с витрины и все свои товары,
+        # поэтому кэш каталога надо сбросить сразу.
+        super().save_model(request, obj, form, change)
+        bump_catalog_version(obj.organization_id)
 
 
 @admin.register(Item)

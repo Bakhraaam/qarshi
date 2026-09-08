@@ -37,8 +37,10 @@ class FrontendCategoryViewSet(BaseFrontendReadOnlyModelViewSet):
     authentication_classes = []
 
     def get_queryset(self):
+        # Недействительные категории на сайте не показываем — как и их товары
         return ItemType.objects.filter(
-            organization=self.current_organization
+            organization=self.current_organization,
+            is_invalid=False,
         ).distinct().order_by('name')
 
 
@@ -85,17 +87,20 @@ class FrontendProductViewSet(BaseFrontendReadOnlyModelViewSet):
 
     def get_queryset(self):
         # На сайте показываем только товары, которые реально можно заказать:
-        #  * не помечены в 1С как недействительные (is_invalid);
+        #  * сам товар не помечен в 1С как недействительный (is_invalid);
+        #  * его категория тоже не помечена недействительной;
         #  * есть положительный остаток на складе этого филиала.
         # Остаток хранится в ItemStock с unique (item, organization), поэтому join
         # не размножает строки и .distinct() здесь не нужен.
+        # Категорию отсекаем через exclude, а не filter(is_invalid=False): так товар
+        # без категории остаётся в выдаче, а не отсеивается join'ом.
         # prefetch stocks добавлен: get_stock читает из памяти без N+1
         queryset = Item.objects.filter(
             organization=self.current_organization,
             is_invalid=False,
             stocks__organization=self.current_organization,
             stocks__stock__gt=0,
-        ) \
+        ).exclude(item_type__is_invalid=True) \
             .select_related('item_type') \
             .prefetch_related('images', 'prices__price_type', 'stocks') \
             .order_by('name')
