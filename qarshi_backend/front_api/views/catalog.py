@@ -102,7 +102,7 @@ class FrontendProductViewSet(BaseFrontendReadOnlyModelViewSet):
             stocks__stock__gt=0,
         ).exclude(item_type__is_invalid=True) \
             .select_related('item_type') \
-            .prefetch_related('images', 'prices__price_type', 'stocks') \
+            .prefetch_related('images', 'packages', 'prices__price_type', 'stocks') \
             .order_by('name')
 
         price_from = self.request.query_params.get('price_from')

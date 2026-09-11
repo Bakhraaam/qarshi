@@ -125,12 +125,51 @@ class ItemImage(models.Model):
     # Используем CharField/URLField, так как 1С будет передавать нам готовые пути/ссылки к файлам
     image_path = models.ImageField(upload_to='products/', max_length=512, verbose_name="Файл картинки")
     is_main = models.BooleanField(default=False, verbose_name="Главная картинка")
+    # Пометка «недействительна»: 1С сообщает, что картинка больше не актуальна.
+    # Такая картинка скрыта из каталога, но файл и запись остаются — 1С может
+    # вернуть её обратно, прислав is_invalid=false, не перезаливая байты.
+    is_invalid = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name="Недействительна (не показывать на сайте)"
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата добавления")
 
     class Meta:
         verbose_name = "Картинка товара"
         verbose_name_plural = "Картинки товаров"
         ordering = ['-is_main', 'created_at']
+
+
+# 4.1 Упаковки номенклатуры (блок, коробка, паллет...)
+class ItemPackage(models.Model):
+    """Вариант фасовки товара сверх базовой единицы измерения (`Item.unit`).
+
+    Цена всегда хранится и считается за БАЗОВУЮ единицу, а упаковка — это только
+    множитель: «Коробка = 10 шт» значит, что 2 коробки это 20 шт по цене за штуку.
+    Базовая единица отдельной записью не хранится — она и так есть в `Item.unit`.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False,
+                          verbose_name="Уникальный Идентификатор 1С")
+    item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name='packages',
+                             verbose_name="Товар")
+    name = models.CharField(max_length=100, verbose_name="Наименование упаковки")
+    # Сколько базовых единиц в одной упаковке. Дробное допустимо: «Канистра = 2.5 л».
+    quantity = models.DecimalField(max_digits=12, decimal_places=3, default=1,
+                                   verbose_name="Базовых единиц в упаковке")
+    is_default = models.BooleanField(default=False, verbose_name="Выбрана по умолчанию")
+    # Как у товаров и категорий: снятую с продажи упаковку прячем, но не удаляем —
+    # на неё могут ссылаться корзины и история заказов.
+    is_invalid = models.BooleanField(default=False, db_index=True,
+                                     verbose_name="Недействительна (не показывать на сайте)")
+
+    class Meta:
+        verbose_name = "Упаковка товара"
+        verbose_name_plural = "Упаковки товаров"
+        ordering = ['quantity', 'name']
+
+    def __str__(self):
+        return f"{self.name} = {self.quantity} {self.item.unit or ''}".strip()
 
 
 # 5. Виды цен
@@ -293,6 +332,18 @@ class OrderItem(models.Model):
     price = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="Цена при покупке")
     discount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00, verbose_name="Скидка")
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="Сумма позиции")
+
+    # --- Снимок выбранной упаковки на момент заказа ---
+    # Храним копией, а не FK: упаковку в 1С могут переименовать или снять с продажи,
+    # а в истории заказа должно остаться то, что клиент реально выбирал.
+    # `quantity` выше всегда в БАЗОВЫХ единицах — 1С разбирает заказ как раньше,
+    # а поля ниже нужны только чтобы показать «2 коробки по 10 шт».
+    package_id = models.UUIDField(null=True, blank=True, verbose_name="ID упаковки в 1С")
+    package_name = models.CharField(max_length=100, blank=True, default="", verbose_name="Упаковка")
+    package_ratio = models.DecimalField(max_digits=12, decimal_places=3, default=1,
+                                        verbose_name="Базовых единиц в упаковке")
+    package_count = models.DecimalField(max_digits=12, decimal_places=3, default=0,
+                                        verbose_name="Количество упаковок")
 
     is_canceled = models.BooleanField(default=False, verbose_name="Отменено")
     cancellation_reason = models.CharField(max_length=255, blank=True, null=True, verbose_name="Причина отмены")

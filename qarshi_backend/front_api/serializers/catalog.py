@@ -1,6 +1,6 @@
 from rest_framework import serializers
 # Импортируем наши модели из домена sync_1c
-from sync_1c.models import Item, ItemType, ItemImage, PriceList
+from sync_1c.models import Item, ItemType, ItemImage, ItemPackage, PriceList
 
 
 # --- Единые помощники: читают из УЖЕ подгруженных (prefetch_related) связей в памяти ---
@@ -22,11 +22,18 @@ def resolve_item_price(item, price_type_id=None):
     return float(prices[0].price)
 
 
+def _valid_images(item):
+    """Картинки, которые можно показывать: 1С могла пометить часть как недействительные
+    (файл битый/товар переснят), и такие в каталог не идут. Фильтруем в памяти —
+    .filter() по связи сбросил бы prefetch и дал N+1."""
+    return [img for img in item.images.all() if not img.is_invalid and img.image_path]
+
+
 def resolve_item_image_url(item, request=None):
     """URL главной (или первой) картинки. Картинки идут в порядке -is_main, created_at."""
-    images = list(item.images.all())
+    images = _valid_images(item)
     main_img = next((i for i in images if i.is_main), None) or (images[0] if images else None)
-    if main_img and main_img.image_path:
+    if main_img:
         if request:
             return request.build_absolute_uri(main_img.image_path.url)
         return main_img.image_path.url
@@ -36,12 +43,26 @@ def resolve_item_image_url(item, request=None):
 def resolve_item_image_urls(item, request=None):
     """Все картинки товара в порядке модели (-is_main, created_at) — для галереи в карточке."""
     urls = []
-    for img in item.images.all():
-        if not img.image_path:
-            continue
+    for img in _valid_images(item):
         url = img.image_path.url
         urls.append(request.build_absolute_uri(url) if request else url)
     return urls
+
+
+def resolve_item_packages(item):
+    """Упаковки товара для фронта: базовой единицы тут нет — она и так в поле `unit`.
+    Цена всегда за базовую единицу, `quantity` — множитель («Коробка» = 10 шт)."""
+    packages = []
+    for pkg in item.packages.all():
+        if pkg.is_invalid:
+            continue
+        packages.append({
+            'id': str(pkg.id),
+            'name': pkg.name,
+            'quantity': float(pkg.quantity),
+            'is_default': pkg.is_default,
+        })
+    return packages
 
 
 def resolve_item_stock(item):
@@ -73,7 +94,7 @@ class FrontendProductImageSerializer(serializers.ModelSerializer):
     """Сериализатор всех картинок для галереи в карточке товара"""
     class Meta:
         model = ItemImage
-        fields = ['id', 'image_path', 'is_main']
+        fields = ['id', 'image_path', 'is_main', 'is_invalid']
 
 
 class FrontendProductListSerializer(serializers.ModelSerializer):
@@ -89,11 +110,13 @@ class FrontendProductListSerializer(serializers.ModelSerializer):
     images = serializers.SerializerMethodField()
     price = serializers.SerializerMethodField()
     stock = serializers.SerializerMethodField()
+    # Варианты фасовки сверх базовой единицы: блок, коробка и т.п.
+    packages = serializers.SerializerMethodField()
 
     class Meta:
         model = Item
         fields = ['id', 'articul', 'code', 'name', 'unit', 'category_id', 'category_name',
-                  'image_url', 'images', 'price', 'stock']
+                  'image_url', 'images', 'price', 'stock', 'packages']
 
     def get_category_id(self, obj):
         # Безопасно проверяем: если связь есть — возвращаем строковый UUID, если нет — null
@@ -117,6 +140,9 @@ class FrontendProductListSerializer(serializers.ModelSerializer):
     def get_stock(self, obj):
         return resolve_item_stock(obj)
 
+    def get_packages(self, obj):
+        return resolve_item_packages(obj)
+
 
 class FrontendProductDetailSerializer(FrontendProductListSerializer):
     """Карточка товара (GET products/<id>/): то же, что в сетке, плюс валюта цены."""
@@ -131,3 +157,10 @@ class FrontendProductDetailSerializer(FrontendProductListSerializer):
             if p.price_type and str(p.price_type_id) == str(price_type_id):
                 return p.price_type.currency
         return ''
+
+
+class FrontendItemPackageSerializer(serializers.ModelSerializer):
+    """Упаковка товара: `quantity` — сколько базовых единиц в одной упаковке."""
+    class Meta:
+        model = ItemPackage
+        fields = ['id', 'name', 'quantity', 'is_default']

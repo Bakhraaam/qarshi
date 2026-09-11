@@ -32,6 +32,9 @@ class _CatalogScreenState extends State<CatalogScreen> {
   List<Product> _products = [];
   late Map<String, num> _cartQuantities =
       {}; // Перенесено наверх для правильной видимости
+  // Выбранная единица набора по товарам (productId -> packageId).
+  // Зеркало глобального cartPackageNotifier — как и с количествами.
+  Map<String, String> _cartPackages = {};
 
   String? _selectedCategoryId;
   bool _isFirstLoad = true;
@@ -62,11 +65,14 @@ class _CatalogScreenState extends State<CatalogScreen> {
     // Слушаем глобальную корзину: если количества изменили на другом экране
     // (например, в /cart), синхронизируем карточки каталога.
     cartNotifier.addListener(_onGlobalCartChanged);
+    _cartPackages = Map<String, String>.from(cartPackageNotifier.value);
+    cartPackageNotifier.addListener(_onGlobalPackagesChanged);
   }
 
   @override
   void dispose() {
     cartNotifier.removeListener(_onGlobalCartChanged);
+    cartPackageNotifier.removeListener(_onGlobalPackagesChanged);
     _scrollController.dispose();
     _searchController.dispose();
     _debounce?.cancel();
@@ -80,6 +86,14 @@ class _CatalogScreenState extends State<CatalogScreen> {
     if (mapEquals(_cartQuantities, cartNotifier.value)) return;
     setState(() {
       _cartQuantities = Map<String, num>.from(cartNotifier.value);
+    });
+  }
+
+  void _onGlobalPackagesChanged() {
+    if (!mounted) return;
+    if (mapEquals(_cartPackages, cartPackageNotifier.value)) return;
+    setState(() {
+      _cartPackages = Map<String, String>.from(cartPackageNotifier.value);
     });
   }
 
@@ -176,9 +190,22 @@ class _CatalogScreenState extends State<CatalogScreen> {
     });
   }
 
-  // Обновление количества товара с отправкой запросов на бэкенд
-  Future<void> _updateCartQuantity(Product product, num newQuantity) async {
+  // Обновление количества товара с отправкой запросов на бэкенд.
+  // newQuantity всегда в базовых единицах товара; packageId — чем клиент набирал.
+  Future<void> _updateCartQuantity(
+    Product product,
+    num newQuantity, {
+    String? packageId,
+    bool packageChanged = false,
+  }) async {
     if (newQuantity < 0) return;
+
+    if (packageChanged) {
+      setCartPackageLocal(product.id, packageId);
+    }
+    final selectedPackageId = packageChanged
+        ? packageId
+        : cartPackageNotifier.value[product.id];
 
     if (newQuantity == 0) {
       final success = await _api.updateCartItem(product.id, 0);
@@ -198,7 +225,11 @@ class _CatalogScreenState extends State<CatalogScreen> {
       //   return;
       // }
 
-      final success = await _api.updateCartItem(product.id, newQuantity);
+      final success = await _api.updateCartItem(
+        product.id,
+        newQuantity,
+        packageId: selectedPackageId,
+      );
       if (success) {
         setState(() => _cartQuantities[product.id] = newQuantity);
         setCartQuantityLocal(product.id, newQuantity);
@@ -491,9 +522,16 @@ class _CatalogScreenState extends State<CatalogScreen> {
         final cardWidth =
             (constraints.maxWidth - spacing * (columns - 1)) / columns;
         final compactCard = cardWidth < 200;
+        // Высота карточки в сетке фиксированная, поэтому строку выбора упаковки
+        // резервируем сразу для всех карточек — иначе товары с упаковками
+        // обрезались бы, а без них сетка «прыгала» бы при подгрузке страниц.
+        final hasPackages = _products.any((p) => p.packages.isNotEmpty);
         // Картинка квадратная, под ней блок с ценой, названием и кнопкой.
         final imageHeight = cardWidth;
-        final cardHeight = imageHeight + (compactCard ? 150.0 : 158.0);
+        final cardHeight =
+            imageHeight +
+            (compactCard ? 150.0 : 158.0) +
+            (hasPackages ? 34.0 : 0.0);
 
         return GridView.builder(
           controller: _scrollController,
@@ -517,11 +555,26 @@ class _CatalogScreenState extends State<CatalogScreen> {
               quantity: quantity,
               compact: compactCard,
               imageHeight: imageHeight,
+              packageId: _cartPackages[product.id],
               onQuantityChanged: (value) => _updateCartQuantity(product, value),
+              onPackageChanged: (packageId, value) => _updateCartQuantity(
+                product,
+                value,
+                packageId: packageId,
+                packageChanged: true,
+              ),
               onOpenDetails: () => ProductDetailScreen.open(
                 context,
                 product: product,
-                onQuantityChanged: (value) => _updateCartQuantity(product, value),
+                packageId: _cartPackages[product.id],
+                onQuantityChanged: (value) =>
+                    _updateCartQuantity(product, value),
+                onPackageChanged: (packageId, value) => _updateCartQuantity(
+                  product,
+                  value,
+                  packageId: packageId,
+                  packageChanged: true,
+                ),
               ),
             );
           },
@@ -542,6 +595,10 @@ class _ProductCard extends StatelessWidget {
   final ValueChanged<num> onQuantityChanged;
   final VoidCallback onOpenDetails;
 
+  /// Единица, которой клиент набирает товар (null — базовая).
+  final String? packageId;
+  final void Function(String? packageId, num quantity) onPackageChanged;
+
   const _ProductCard({
     super.key,
     required this.product,
@@ -550,6 +607,8 @@ class _ProductCard extends StatelessWidget {
     required this.imageHeight,
     required this.onQuantityChanged,
     required this.onOpenDetails,
+    required this.packageId,
+    required this.onPackageChanged,
   });
 
   @override
@@ -622,7 +681,9 @@ class _ProductCard extends StatelessWidget {
                   ProductCartControl(
                     product: product,
                     quantity: quantity,
+                    packageId: packageId,
                     onQuantityChanged: onQuantityChanged,
+                    onPackageChanged: onPackageChanged,
                   ),
                 ],
               ),

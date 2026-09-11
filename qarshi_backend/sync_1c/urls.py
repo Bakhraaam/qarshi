@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import Sync1cGetNewTelegramUsersView, ItemImageUploadView, Sync1cPullOrdersView, Sync1cUpdateOrdersView, Sync1cUpdateStocksView, Sync1cUpdateOrganizationsView, Sync1cUpdateItemsView, Sync1cUpdatePricelistView, Sync1cUpdateItemTypesView, Sync1cUpdatePriceTypesView, Sync1cUpdateUsersView, Sync1cUserProfileListView, Sync1cUserProfileUnlinkedView, Sync1cUserProfileUpsertView
+from .views import Sync1cGetNewTelegramUsersView, ItemImageUploadView, Sync1cUpdateImagesValidityView, Sync1cPullOrdersView, Sync1cUpdateOrdersView, Sync1cUpdateStocksView, Sync1cUpdateOrganizationsView, Sync1cUpdateItemsView, Sync1cUpdatePricelistView, Sync1cUpdateItemTypesView, Sync1cUpdatePriceTypesView, Sync1cUpdateUsersView, Sync1cUserProfileListView, Sync1cUserProfileUnlinkedView, Sync1cUserProfileUpsertView
 urlpatterns = [
     # старый метод
     # path('data/', BulkDataSyncView.as_view(), name='bulk_data_sync'),
@@ -22,6 +22,9 @@ urlpatterns = [
     path('price-list/', Sync1cUpdatePricelistView.as_view(), name='1c_update_price_list'),
     # Маршрут для картинки товаров:
     path('image_item_upload/', ItemImageUploadView.as_view(), name='item_item_image_upload'),
+
+    # Пометка «действительна/недействительна» для уже загруженных картинок (без перезаливки файла)
+    path('images/validity/', Sync1cUpdateImagesValidityView.as_view(), name='1c_update_images_validity'),
     # Маршрут для организаций
     path('organizations/', Sync1cUpdateOrganizationsView.as_view(), name='1c_update_organizations'),
     # Маршрут для получения новых заказов

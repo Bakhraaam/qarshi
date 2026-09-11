@@ -17,7 +17,7 @@ python manage.py runserver            # dev server
 python manage.py migrate              # apply migrations
 python manage.py makemigrations       # create migrations after model changes
 python manage.py createsuperuser      # admin access
-python manage.py test                 # run tests (test files are currently empty stubs)
+python manage.py test                 # run tests (front_api/tests.py: bot, packaging, 1C ingestion)
 python manage.py test front_api       # run one app's tests
 ```
 
@@ -38,12 +38,12 @@ python manage.py clear_itemstock [--no-input]   # wipe all ItemStocks
 Two Django apps sit on top of a shared data model. Understanding the split is the key to this codebase:
 
 ### `sync_1c` — the source of truth (1C → backend ingestion)
-- **Owns all the core models** (`sync_1c/models.py`): `Organization`, `ItemType`, `Item`, `ItemImage`, `PriceType`, `PriceList`, `ItemStock`, `UserProfile`, `Order`, `OrderItem`. `front_api` imports these; it does not redefine them.
+- **Owns all the core models** (`sync_1c/models.py`): `Organization`, `ItemType`, `Item`, `ItemImage`, `ItemPackage`, `PriceType`, `PriceList`, `ItemStock`, `UserProfile`, `Order`, `OrderItem`. `front_api` imports these; it does not redefine them.
 - Most primary keys are **UUIDs that come from 1C** (`id = UUIDField`), so upserts key on the 1C-provided id.
 - Exposes machine-to-machine endpoints under `/sync_1c/...` (`sync_1c/urls.py`, all logic in the single large `sync_1c/views.py`). Views subclass `Base1cAPIView` (TokenAuth + IsAuthenticated) and use `bulk_create(..., update_conflicts=True)` upserts. Direction is bidirectional: 1C pushes catalog/price/stock/user data in; `orders/pull` and `orders/update` let 1C pull placed orders and write back statuses / 1C order numbers.
 
 ### `front_api` — the tenant-facing app API (Flutter frontend)
-- Adds only **frontend-specific models** (`front_api/models.py`): `TelegramAccount`, `CartItem` (server-side cart).
+- Adds only **frontend-specific models** (`front_api/models.py`): `TelegramAccount`, `CartItem` (server-side cart; quantity in base units, optional `package`).
 - URLs mounted at `/api/v1/<org_prefix>/...` (see root `qarshi_backend/urls.py`). **`<org_prefix>` in the URL path is how tenancy is resolved** — not by subdomain (subdomain logic is commented out).
 - `front_api/views/base.py` defines base classes (`BaseFrontendAPIView`, `BaseFrontendViewSet`, `BaseFrontendReadOnlyModelViewSet`, `BaseFrontendGenericViewSet`). Their `initial()` reads `org_prefix` from the URL kwargs, looks up the `Organization`, and stashes it as `self.current_organization` (400 if missing, 404 if unknown). **All frontend querysets must filter by `self.current_organization`** — this is the tenant isolation boundary. New frontend views should extend these base classes.
 - Views are split by domain: `catalog.py` (categories/products, paginated, `?query=` search, `?category=` filter), `cart.py`, `orders.py`, `auth.py`. Serializers mirror this split under `front_api/serializers/`.
@@ -91,6 +91,32 @@ outbound works but Telegram's subnets time out on the way in), run long polling 
 `getUpdates` returns 409 while a webhook is registered, so the command drops the webhook on start (keeping the
 queued updates). Offsets live in the cache (`telegram:polling:offset:<prefix>`), so a restart doesn't replay
 messages. In Docker it is a separate profiled service: `docker compose --profile polling up -d bot`.
+
+### Units and packaging
+`Item.unit` is the **base unit** and every price in `PriceList` is per base unit — that never changes.
+`ItemPackage` adds ways to buy several base units at once (`Коробка` with `quantity=10` means ten base
+units per box). Consequences worth remembering before touching cart or order code:
+
+- `CartItem.quantity` and `OrderItem.quantity` are **always in base units**, so `price * quantity` stays
+  correct everywhere and 1C keeps receiving the quantities it always did. The Flutter client does the
+  multiplication and posts base units.
+- `CartItem.package` only records which unit the customer was counting in (`SET_NULL`, so a package
+  removed by a sync does not take the cart line with it). `POST cart/` accepts an optional `package_id`.
+- `OrderItem` keeps a **copy** of the package (`package_id`, `package_name`, `package_ratio`,
+  `package_count`) rather than a FK: renaming or retiring a package in 1C must not rewrite history.
+  `orders/pull` exposes those four fields alongside the unchanged `quantity`.
+- 1C pushes packages inside `items/`: a row may carry `packages: [{id, name, quantity, is_default,
+  is_invalid}]`. Same key semantics as `images` — key absent means "don't touch", `[]` means "base unit
+  only". Packages are upserted by their 1C GUID (not recreated), and ones missing from the payload are
+  deleted.
+
+### Product images
+`items/` still accepts `images` as a list of path strings, and now also as objects
+`{id, path|url|image_path, is_main, is_invalid}` so 1C can send its own GUID and a validity flag.
+`ItemImage.is_invalid` hides a picture from the catalog **without deleting the file**, so 1C can bring it
+back with a single flag. Two ways to set it: `POST sync_1c/images/validity/` with
+`[{"id": ..., "is_invalid": true}, ...]` (no file transfer), or an `is_invalid` field alongside an upload
+to `image_item_upload/`. Deleting a picture outright is still `image_item_upload/` with an empty `image`.
 
 ### Order lifecycle
 Frontend places an order (`front_api/views/orders.py`) → `Order`/`OrderItem` created (status `new`, human number auto-generated as `ORD-YYYYMMDD-NNNN` in `Order.save()`) → 1C pulls it via `sync_1c` `orders/pull` → 1C writes back `order_number_1c` and status via `orders/update`.

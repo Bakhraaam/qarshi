@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.db.models import Count, OuterRef, Subquery
 from django.utils.html import format_html
 from front_api.cache import bump_catalog_version
-from .models import Organization, ItemType, Item, ItemImage, PriceType, PriceList, UserProfile, OrderItem, Order, ItemStock
+from .models import Organization, ItemType, Item, ItemImage, ItemPackage, PriceType, PriceList, UserProfile, OrderItem, Order, ItemStock
 
 
 # Платформа мультифилиальная: почти у каждой таблицы есть организация,
@@ -59,7 +59,7 @@ class ItemImageInline(admin.TabularInline):
     model = ItemImage
     extra = 1  # Количество пустых полей для добавления новых картинок вручную
     readonly_fields = ['preview']
-    fields = ['image_path', 'is_main', 'preview']
+    fields = ['image_path', 'is_main', 'is_invalid', 'preview']
 
     @admin.display(description="Предпросмотр")
     def preview(self, obj):
@@ -70,6 +70,13 @@ class ItemImageInline(admin.TabularInline):
                 obj.image_path.url,
             )
         return "Нет картинки"
+
+
+# Упаковки товара (блок, коробка) — редактируются прямо внутри карточки товара
+class ItemPackageInline(admin.TabularInline):
+    model = ItemPackage
+    extra = 0
+    fields = ['name', 'quantity', 'is_default', 'is_invalid']
 
 
 # Настройка отображения цен внутри карточки товара
@@ -128,7 +135,7 @@ class ItemAdmin(admin.ModelAdmin):
     list_per_page = 50
     readonly_fields = ('id', 'updated_at')
     # Подключаем inline-блоки, чтобы картинки и цены редактировались прямо внутри товара
-    inlines = [ItemImageInline, PriceListInline]
+    inlines = [ItemImageInline, ItemPackageInline, PriceListInline]
 
     fieldsets = [
         ('Идентификация в 1С', {
@@ -259,11 +266,19 @@ class UserProfileAdmin(admin.ModelAdmin):
 class OrderItemInline(admin.TabularInline):
     model = OrderItem
     # ИСПРАВЛЕНО: Добавили скидку, флаг отмены и причину в список колонок
-    fields = ['item', 'quantity', 'price', 'discount', 'total_amount', 'is_canceled', 'cancellation_reason']
+    fields = ['item', 'quantity', 'package_display', 'price', 'discount', 'total_amount', 'is_canceled', 'cancellation_reason']
 
     # Все поля делаем только для чтения, чтобы случайно не сломать данные синхронизации
-    readonly_fields = ['item', 'quantity', 'price', 'discount', 'total_amount', 'is_canceled', 'cancellation_reason']
+    readonly_fields = ['item', 'quantity', 'package_display', 'price', 'discount', 'total_amount',
+                       'is_canceled', 'cancellation_reason']
     extra = 0
+
+    @admin.display(description="Упаковка")
+    def package_display(self, obj):
+        # quantity выше всегда в базовых единицах — здесь показываем, чем клиент набирал.
+        if not obj.package_name:
+            return "—"
+        return f"{obj.package_count:g} × {obj.package_name} (по {obj.package_ratio:g})"
 
     def get_queryset(self, request):
         return super().get_queryset(request).select_related('item')
@@ -367,13 +382,14 @@ class ItemStockAdmin(admin.ModelAdmin):
 @admin.register(ItemImage)
 class ItemImageAdmin(admin.ModelAdmin):
     # Колонки в общем списке
-    list_display = ['preview', 'item', 'organization', 'is_main', 'image_path', 'created_at']
+    list_display = ['preview', 'item', 'organization', 'is_main', 'is_invalid', 'image_path', 'created_at']
     list_display_links = ['preview', 'item']
-    list_filter = ['item__organization', 'is_main', 'created_at']
+    list_filter = ['item__organization', 'is_main', 'is_invalid', 'created_at']
     search_fields = ['item__name', 'item__articul', 'item__code']
     list_select_related = ['item', 'item__organization']
     ordering = ['-created_at']
     list_per_page = 50
+    list_editable = ['is_invalid']
     readonly_fields = ['created_at', 'large_preview']
 
     @admin.display(description="Фото")
@@ -397,3 +413,20 @@ class ItemImageAdmin(admin.ModelAdmin):
     @admin.display(description="Организация", ordering='item__organization')
     def organization(self, obj):
         return obj.item.organization
+
+
+@admin.register(ItemPackage)
+class ItemPackageAdmin(admin.ModelAdmin):
+    list_display = ['name', 'item', 'quantity', 'base_unit', 'is_default', 'is_invalid']
+    list_display_links = ['name']
+    list_filter = ['item__organization', 'is_default', 'is_invalid']
+    list_editable = ['is_default', 'is_invalid']
+    search_fields = ['name', 'item__name', 'item__articul', 'item__code', 'id']
+    list_select_related = ['item']
+    ordering = ['item__name', 'quantity']
+    list_per_page = 50
+    readonly_fields = ['id']
+
+    @admin.display(description="Базовая единица")
+    def base_unit(self, obj):
+        return obj.item.unit or "—"

@@ -9,7 +9,10 @@ class OrderItemOutputSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = OrderItem
-        fields = ['product', 'quantity', 'price', 'discount', 'total_amount']
+        # package_* — снимок упаковки на момент заказа: quantity всё так же в базовых
+        # единицах, а эти поля позволяют показать «2 коробки по 10 шт».
+        fields = ['product', 'quantity', 'price', 'discount', 'total_amount',
+                  'package_id', 'package_name', 'package_ratio', 'package_count']
 
 
 class OrderListSerializer(serializers.ModelSerializer):

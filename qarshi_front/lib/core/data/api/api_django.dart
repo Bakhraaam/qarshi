@@ -214,12 +214,24 @@ class DjangoApi {
   }
 
   // 2. Обновить количество товара в корзине (или добавить, если его нет)
-  Future<bool> updateCartItem(String productId, num quantity) async {
+  //
+  // quantity — ВСЕГДА в базовых единицах товара, даже если клиент набирал коробками:
+  // цена в прайсе за базовую единицу. packageId нужен только чтобы бэкенд запомнил
+  // выбранную единицу и показал её обратно (null — базовая единица).
+  Future<bool> updateCartItem(
+    String productId,
+    num quantity, {
+    String? packageId,
+  }) async {
     print('tokenAccess: $tokenAccess');
     try {
       final response = await _dio.post(
         'cart/',
-        data: {'item_id': productId, 'quantity': quantity},
+        data: {
+          'item_id': productId,
+          'quantity': quantity,
+          'package_id': packageId,
+        },
         options: Options(headers: {'Authorization': 'Bearer $tokenAccess'}),
       );
       return response.statusCode == 200;
@@ -243,14 +255,21 @@ class DjangoApi {
     }
   }
 
-  // Возвращает ID товара и его количество в корзине: {'product_id': quantity}
+  // Возвращает ID товара и его количество в корзине: {'product_id': quantity}.
+  // Заодно поднимает в глобальное состояние выбранные упаковки, чтобы каталог
+  // показывал количество в той же единице, в которой клиент его набирал.
   Future<Map<String, num>> getCartQuantities() async {
     try {
       final cartItems = await getCart(); // Используем метод из предыдущего шага
       final Map<String, num> quantities = {};
+      final Map<String, String> packages = {};
       for (var item in cartItems) {
         quantities[item.product.id] = item.quantity;
+        if (item.packageId != null && item.packageId!.isNotEmpty) {
+          packages[item.product.id] = item.packageId!;
+        }
       }
+      cartPackageNotifier.value = packages;
       return quantities;
     } catch (e) {
       return {};
@@ -282,7 +301,8 @@ class DjangoApi {
         options: Options(headers: {'Authorization': 'Bearer $tokenAccess'}),
       );
       if (response.statusCode == 200 && response.data != null) {
-        final number = response.data['order_number'] ??
+        final number =
+            response.data['order_number'] ??
             response.data['number'] ??
             'Успешно';
         return (number.toString(), null);

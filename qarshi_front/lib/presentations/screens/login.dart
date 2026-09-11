@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
 import 'package:qarshi/core/data/api/api_django.dart';
+import 'package:qarshi/core/utils/telegram_insets.dart';
 import 'package:qarshi/core/utils/telegram_launch.dart';
 import 'package:telegram_web_app/telegram_web_app.dart';
 import '../../core/data/api/api_django.dart';
@@ -62,6 +63,10 @@ class _TelegramWebAppAuthScreenState extends State<TelegramWebAppAuthScreen>
           } catch (_) {}
           // Даём анимации перехода устаканиться до навигации/авторизации.
           await Future.delayed(const Duration(milliseconds: 400));
+          // Клиент мог не прислать ни safeAreaChanged, ни fullscreenChanged —
+          // перечитываем отступы сами, иначе шапка каталога останется под
+          // кнопками Telegram и перестанет нажиматься.
+          refreshTelegramInsets();
         }
         if (!mounted) return;
 
@@ -169,7 +174,10 @@ class _TelegramWebAppAuthScreenState extends State<TelegramWebAppAuthScreen>
                               children: [
                                 _ripple(accent, _pulse.value, 112),
                                 _ripple(
-                                    accent, (_pulse.value + 0.5) % 1.0, 112),
+                                  accent,
+                                  (_pulse.value + 0.5) % 1.0,
+                                  112,
+                                ),
                                 child!,
                               ],
                             );
@@ -227,8 +235,7 @@ class _TelegramWebAppAuthScreenState extends State<TelegramWebAppAuthScreen>
                       child: LinearProgressIndicator(
                         minHeight: 3.5,
                         backgroundColor: accent.withValues(alpha: 0.12),
-                        valueColor:
-                            const AlwaysStoppedAnimation<Color>(accent),
+                        valueColor: const AlwaysStoppedAnimation<Color>(accent),
                       ),
                     ),
                   ),

@@ -75,7 +75,10 @@ class OrderItem1CSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = OrderItem
-        fields = ['product_id', 'quantity', 'price', 'total_amount']
+        # quantity и price — как и раньше, в БАЗОВЫХ единицах товара, ничего не изменилось.
+        # package_* добавлены справочно: чем клиент набирал позицию на сайте.
+        fields = ['product_id', 'quantity', 'price', 'total_amount',
+                  'package_id', 'package_name', 'package_ratio', 'package_count']
 
 
 class Order1COutputSerializer(serializers.ModelSerializer):

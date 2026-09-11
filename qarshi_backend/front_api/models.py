@@ -1,6 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import User
-from sync_1c.models import Item, Organization
+from sync_1c.models import Item, ItemPackage, Organization
 from django.conf import settings
 
 
@@ -55,7 +55,22 @@ class CartItem(models.Model):
         verbose_name="Организация"
     )
 
-    quantity = models.PositiveIntegerField(default=1, verbose_name="Количество")
+    # Количество ВСЕГДА в базовых единицах товара (`Item.unit`), даже когда клиент
+    # набирает коробками: цена в прайсе за базовую единицу, поэтому `price * quantity`
+    # остаётся верным везде. Дробное — потому что упаковка может быть, например, 2.5 л.
+    quantity = models.DecimalField(max_digits=12, decimal_places=3, default=1,
+                                   verbose_name="Количество (базовых единиц)")
+    # Упаковка, которой клиент набирал позицию — нужна только чтобы показать её
+    # обратно тем же способом («2 коробки», а не «20 шт») и перенести в заказ.
+    # SET_NULL: если 1С удалит упаковку, корзина не должна пропасть.
+    package = models.ForeignKey(
+        ItemPackage,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='cart_items',
+        verbose_name="Упаковка"
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Добавлено")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="Изменено")
 

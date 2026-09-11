@@ -11,6 +11,15 @@ String formatPrice(num price) {
       currentUser!.userProfile.priceType.currency;
 }
 
+/// Количество без хвоста «.0»: «3 шт», а не «3.0 шт». Дробные значения
+/// (0.5 л, 2.5 кг) при этом сохраняются как есть.
+String formatNumber(num value) {
+  if (value == value.roundToDouble()) {
+    return value.toInt().toString();
+  }
+  return value.toString();
+}
+
 /// 1. Переводит ISO-строку в красивую дату (например: 30.05.2026)
 String formatDate(String isoString) {
   if (isoString.isEmpty) return '';

@@ -52,8 +52,12 @@ class _CartScreenState extends State<CartScreen> {
       });
 
       // Синхронизируем глобальную корзину (бейдж/каталог) с сервером.
-      cartNotifier.value = {
-        for (final it in items) it.product.id: it.quantity,
+      cartNotifier.value = {for (final it in items) it.product.id: it.quantity};
+      // И выбранные единицы набора — чтобы каталог показывал коробки коробками.
+      cartPackageNotifier.value = {
+        for (final it in items)
+          if (it.packageId != null && it.packageId!.isNotEmpty)
+            it.product.id: it.packageId!,
       };
     } catch (e) {
       debugPrint('Ошибка загрузки корзины: $e');
@@ -68,7 +72,16 @@ class _CartScreenState extends State<CartScreen> {
     }
   }
 
+  /// Убираем хвосты вроде 2.9999999999 после умножения/деления на множитель упаковки.
+  num _normalizeQuantity(num value) {
+    final rounded = num.parse(value.toStringAsFixed(3));
+    if (rounded == rounded.roundToDouble()) return rounded.toInt();
+    return rounded;
+  }
+
+  /// newQuantity — всегда в БАЗОВЫХ единицах товара (цена в прайсе за неё же).
   Future<void> _changeQuantity(CartItem item, num newQuantity) async {
+    newQuantity = _normalizeQuantity(newQuantity);
     if (newQuantity < 0) return;
 
     final previousQuantity = item.quantity;
@@ -81,7 +94,11 @@ class _CartScreenState extends State<CartScreen> {
       }
     });
 
-    final success = await _api.updateCartItem(item.product.id, newQuantity);
+    final success = await _api.updateCartItem(
+      item.product.id,
+      newQuantity,
+      packageId: item.packageId,
+    );
 
     if (!success && mounted) {
       setState(() {
@@ -257,8 +274,11 @@ class _CartScreenState extends State<CartScreen> {
                   color: const Color(0xFFFEF3C7),
                   borderRadius: BorderRadius.circular(24),
                 ),
-                child: const Icon(Icons.info_outline_rounded,
-                    color: Color(0xFFD97706), size: 38),
+                child: const Icon(
+                  Icons.info_outline_rounded,
+                  color: Color(0xFFD97706),
+                  size: 38,
+                ),
               ),
               const SizedBox(height: 18),
               const Text(
@@ -292,8 +312,10 @@ class _CartScreenState extends State<CartScreen> {
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  child: const Text('Понятно',
-                      style: TextStyle(fontWeight: FontWeight.w700)),
+                  child: const Text(
+                    'Понятно',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
                 ),
               ),
             ],
@@ -315,7 +337,10 @@ class _CartScreenState extends State<CartScreen> {
       builder: (dialogContext) {
         return Dialog(
           backgroundColor: Colors.white,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 32,
+            vertical: 24,
+          ),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(22),
           ),
@@ -637,15 +662,16 @@ class _CartScreenState extends State<CartScreen> {
                 item: _cartItems[index],
                 onDecrease: () => _changeQuantity(
                   _cartItems[index],
-                  _cartItems[index].quantity - 1,
+                  _cartItems[index].quantity - _cartItems[index].step,
                 ),
                 onIncrease: () => _changeQuantity(
                   _cartItems[index],
-                  _cartItems[index].quantity + 1,
+                  _cartItems[index].quantity + _cartItems[index].step,
                 ),
+                // В поле клиент вводит количество в выбранной единице.
                 onQuantityChanged: (value) => _changeQuantity(
                   _cartItems[index],
-                  value,
+                  value * _cartItems[index].step,
                 ),
                 onRemove: () => _changeQuantity(_cartItems[index], 0),
               );
@@ -682,15 +708,16 @@ class _CartScreenState extends State<CartScreen> {
                       wide: true,
                       onDecrease: () => _changeQuantity(
                         _cartItems[index],
-                        _cartItems[index].quantity - 1,
+                        _cartItems[index].quantity - _cartItems[index].step,
                       ),
                       onIncrease: () => _changeQuantity(
                         _cartItems[index],
-                        _cartItems[index].quantity + 1,
+                        _cartItems[index].quantity + _cartItems[index].step,
                       ),
+                      // В поле клиент вводит количество в выбранной единице.
                       onQuantityChanged: (value) => _changeQuantity(
                         _cartItems[index],
-                        value,
+                        value * _cartItems[index].step,
                       ),
                       onRemove: () => _changeQuantity(_cartItems[index], 0),
                     );
@@ -809,6 +836,21 @@ class _CartItemCard extends StatelessWidget {
                     fontSize: 12,
                   ),
                 ),
+                // Цена всегда за базовую единицу, поэтому при наборе коробками
+                // показываем, сколько это базовых единиц.
+                if (item.package != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      '${item.package!.name} по '
+                      '${formatNumber(item.package!.quantity)} ${item.product.unit}'
+                      ' · итого ${formatNumber(item.quantity)} ${item.product.unit}',
+                      style: const TextStyle(
+                        color: Color(0xFF94A3B8),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
                 SizedBox(height: wide ? 18 : 14),
                 Wrap(
                   spacing: 12,
@@ -825,8 +867,8 @@ class _CartItemCard extends StatelessWidget {
                       ),
                     ),
                     _QuantityControl(
-                      quantity: item.quantity,
-                      unit: item.product.unit,
+                      quantity: item.displayQuantity,
+                      unit: item.unitLabel,
                       onDecrease: onDecrease,
                       onIncrease: onIncrease,
                       onQuantityChanged: onQuantityChanged,
@@ -900,9 +942,7 @@ class _QuantityControlState extends State<_QuantityControl> {
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(
-      text: _formatQuantity(widget.quantity),
-    );
+    _controller = TextEditingController(text: _formatQuantity(widget.quantity));
     _focusNode = FocusNode()..addListener(_handleFocusChanged);
   }
 
@@ -978,27 +1018,18 @@ class _QuantityControlState extends State<_QuantityControl> {
         color: const Color(0xFFF1F5F9),
         borderRadius: BorderRadius.circular(10),
         border: _isEditing
-            ? Border.all(
-                color: const Color(0xFF2563EB),
-                width: 1.2,
-              )
+            ? Border.all(color: const Color(0xFF2563EB), width: 1.2)
             : null,
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _QuantityButton(
-            icon: Icons.remove_rounded,
-            onTap: widget.onDecrease,
-          ),
+          _QuantityButton(icon: Icons.remove_rounded, onTap: widget.onDecrease),
           GestureDetector(
             onTap: _startEditing,
             behavior: HitTestBehavior.opaque,
             child: ConstrainedBox(
-              constraints: const BoxConstraints(
-                minWidth: 66,
-                maxWidth: 110,
-              ),
+              constraints: const BoxConstraints(minWidth: 66, maxWidth: 110),
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4),
                 child: _isEditing
@@ -1011,9 +1042,7 @@ class _QuantityControlState extends State<_QuantityControl> {
                           decimal: true,
                         ),
                         inputFormatters: [
-                          FilteringTextInputFormatter.allow(
-                            RegExp(r'[0-9.,]'),
-                          ),
+                          FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
                         ],
                         textInputAction: TextInputAction.done,
                         style: const TextStyle(
@@ -1045,10 +1074,7 @@ class _QuantityControlState extends State<_QuantityControl> {
               ),
             ),
           ),
-          _QuantityButton(
-            icon: Icons.add_rounded,
-            onTap: widget.onIncrease,
-          ),
+          _QuantityButton(icon: Icons.add_rounded, onTap: widget.onIncrease),
         ],
       ),
     );

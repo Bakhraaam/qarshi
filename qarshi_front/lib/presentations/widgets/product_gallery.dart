@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 /// Галерея картинок товара: листается свайпом, точки-индикаторы снизу,
@@ -73,26 +74,33 @@ class _ProductGalleryState extends State<ProductGallery> {
         child: Stack(
           children: [
             Positioned.fill(
-              child: PageView.builder(
-                controller: _controller,
-                // Одна картинка не листается — лишний скролл только мешает жестам списка.
-                physics: images.length > 1
-                    ? const PageScrollPhysics()
-                    : const NeverScrollableScrollPhysics(),
-                itemCount: images.length,
-                onPageChanged: (value) => setState(() => _index = value),
-                itemBuilder: (context, index) {
-                  return Image.network(
-                    images[index],
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) => const Center(
-                      child: Icon(
-                        Icons.image_not_supported_rounded,
-                        color: Colors.grey,
+              // По умолчанию Flutter разрешает тянуть скроллируемое только пальцем
+              // и стилусом: в браузере на компьютере (в том числе в узком окне, где
+              // работает мобильная вёрстка) картинка не листалась вообще. Добавляем
+              // мышь и трекпад в список устройств перетаскивания.
+              child: ScrollConfiguration(
+                behavior: _GalleryScrollBehavior(),
+                child: PageView.builder(
+                  controller: _controller,
+                  // Одна картинка не листается — лишний скролл только мешает жестам списка.
+                  physics: images.length > 1
+                      ? const PageScrollPhysics()
+                      : const NeverScrollableScrollPhysics(),
+                  itemCount: images.length,
+                  onPageChanged: (value) => setState(() => _index = value),
+                  itemBuilder: (context, index) {
+                    return Image.network(
+                      images[index],
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => const Center(
+                        child: Icon(
+                          Icons.image_not_supported_rounded,
+                          color: Colors.grey,
+                        ),
                       ),
-                    ),
-                  );
-                },
+                    );
+                  },
+                ),
               ),
             ),
             if (images.length > 1)
@@ -148,6 +156,19 @@ class _ProductGalleryState extends State<ProductGallery> {
       ),
     );
   }
+}
+
+/// Разрешает листать галерею перетаскиванием мышью и трекпадом, а не только
+/// пальцем: на десктопе в узком окне стрелок нет, и без этого свайп не работал.
+class _GalleryScrollBehavior extends MaterialScrollBehavior {
+  @override
+  Set<PointerDeviceKind> get dragDevices => const {
+    PointerDeviceKind.touch,
+    PointerDeviceKind.stylus,
+    PointerDeviceKind.invertedStylus,
+    PointerDeviceKind.mouse,
+    PointerDeviceKind.trackpad,
+  };
 }
 
 class _GalleryArrow extends StatelessWidget {

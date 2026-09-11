@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.db import transaction, IntegrityError
 
-from .models import Organization, ItemType, Item, ItemImage, PriceType, PriceList, UserProfile, ItemStock
+from .models import Organization, ItemType, Item, ItemImage, ItemPackage, PriceType, PriceList, UserProfile, ItemStock
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.contrib.auth.models import User
 from django.contrib.auth.hashers import make_password
@@ -15,6 +15,7 @@ from rest_framework.authentication import TokenAuthentication
 from rest_framework.permissions import IsAuthenticated
 import uuid
 import base64
+from decimal import Decimal, InvalidOperation
 from django.core.files.base import ContentFile
 
 from front_api.models import TelegramAccount
@@ -119,6 +120,79 @@ def parse_1c_bool(value):
     return False
 
 
+def parse_1c_decimal(value, default=Decimal('0')):
+    """Число из 1С: приходит то числом, то строкой, то с запятой вместо точки."""
+    if value is None or value == '':
+        return default
+    try:
+        return Decimal(str(value).strip().replace(',', '.'))
+    except (InvalidOperation, ValueError):
+        return default
+
+
+def build_item_images(item_id, raw_images):
+    """Картинки товара из массива `images` в строке 1С.
+
+    Элемент — либо строка (путь к файлу, старый формат), либо объект
+    {"id", "path"/"url"/"image_path", "is_main", "is_invalid"}: так 1С может
+    прислать свой GUID картинки и пометку «недействительна», не перезаливая файл.
+    """
+    images = []
+    for index, raw in enumerate(raw_images or []):
+        if isinstance(raw, dict):
+            path = raw.get('path') or raw.get('url') or raw.get('image_path')
+            if not path:
+                continue
+            image_id = raw.get('id') or uuid.uuid4()
+            is_main = parse_1c_bool(raw['is_main']) if 'is_main' in raw else (index == 0)
+            is_invalid = parse_1c_bool(raw.get('is_invalid'))
+        else:
+            path = raw
+            if not path:
+                continue
+            image_id = uuid.uuid4()
+            is_main = (index == 0)
+            is_invalid = False
+        images.append(
+            ItemImage(
+                id=image_id,
+                item_id=item_id,
+                image_path=path,
+                is_main=is_main,
+                is_invalid=is_invalid,
+            )
+        )
+    return images
+
+
+def build_item_packages(item_id, raw_packages):
+    """Упаковки товара из массива `packages` в строке 1С.
+
+    Элемент — объект {"id", "name", "quantity", "is_default", "is_invalid"}, где
+    quantity — сколько БАЗОВЫХ единиц товара в одной упаковке. Строки без id или
+    с неположительным quantity пропускаем: такая упаковка ничего не умножает.
+    """
+    packages = []
+    for raw in raw_packages or []:
+        if not isinstance(raw, dict):
+            continue
+        package_id = raw.get('id')
+        quantity = parse_1c_decimal(raw.get('quantity'))
+        if not package_id or quantity <= 0:
+            continue
+        packages.append(
+            ItemPackage(
+                id=package_id,
+                item_id=item_id,
+                name=(raw.get('name') or '').strip() or 'Упаковка',
+                quantity=quantity,
+                is_default=parse_1c_bool(raw.get('is_default')),
+                is_invalid=parse_1c_bool(raw.get('is_invalid')),
+            )
+        )
+    return packages
+
+
 class Sync1cUpdateItemsView(Base1cAPIView):
 
     def post(self, request):
@@ -137,6 +211,8 @@ class Sync1cUpdateItemsView(Base1cAPIView):
         items_to_upsert = []
         images_to_create = []
         item_ids_with_images = []  # только товары, для которых 1С прислала ключ "images"
+        packages_to_upsert = []
+        item_ids_with_packages = []  # только товары, для которых 1С прислала ключ "packages"
         skipped = 0
 
         # Кэширование категорий и организаций для быстрой проверки (по одному запросу)
@@ -183,15 +259,13 @@ class Sync1cUpdateItemsView(Base1cAPIView):
             # а отсутствие ключа — «не трогать картинки вообще».
             if "images" in item_row:
                 item_ids_with_images.append(item_id)
-                for index, img_path in enumerate(item_row["images"]):
-                    images_to_create.append(
-                        ItemImage(
-                            id=uuid.uuid4(),
-                            item_id=item_id,
-                            image_path=img_path,
-                            is_main=(index == 0)
-                        )
-                    )
+                images_to_create.extend(build_item_images(item_id, item_row["images"]))
+
+            # Упаковки — по той же логике, что и картинки: ключа нет — не трогаем,
+            # пустой список означает «у товара остаётся только базовая единица».
+            if "packages" in item_row:
+                item_ids_with_packages.append(item_id)
+                packages_to_upsert.extend(build_item_packages(item_id, item_row["packages"]))
 
         # Запускаем транзакцию для записи в БД
         try:
@@ -214,6 +288,22 @@ class Sync1cUpdateItemsView(Base1cAPIView):
                         ItemImage.objects.filter(item_id__in=item_ids_with_images).delete()
                         if images_to_create:
                             ItemImage.objects.bulk_create(images_to_create, batch_size=SYNC_BATCH_SIZE)
+
+                    # Упаковки не пересоздаём, а апсертим по GUID из 1С: на них ссылаются
+                    # корзины, и пересоздание молча обнулило бы выбранную клиентом упаковку.
+                    # Пропавшие из пакета упаковки удаляем — CartItem.package это SET_NULL,
+                    # а в заказах упаковка лежит копией, поэтому история не пострадает.
+                    if item_ids_with_packages:
+                        kept_ids = [p.id for p in packages_to_upsert]
+                        ItemPackage.objects.filter(item_id__in=item_ids_with_packages) \
+                            .exclude(id__in=kept_ids).delete()
+                        if packages_to_upsert:
+                            ItemPackage.objects.bulk_create(
+                                packages_to_upsert, update_conflicts=True,
+                                unique_fields=['id'],
+                                update_fields=['item_id', 'name', 'quantity', 'is_default', 'is_invalid'],
+                                batch_size=SYNC_BATCH_SIZE,
+                            )
         except IntegrityError:
             return Response(
                 {"ok": False, "message": "Ошибка целостности данных. Убедитесь, что организации и виды номенклатуры уже загружены на сайт."},
@@ -798,13 +888,19 @@ class ItemImageUploadView(Base1cAPIView):
                 else:
                     is_main = not ItemImage.objects.filter(item=item_obj).exists()
 
+                defaults = {
+                    'item': item_obj,
+                    'image_path': image_file,
+                    'is_main': is_main,
+                }
+                # Пометку «недействительна» трогаем только если 1С её реально прислала:
+                # старые версии обмена про это поле не знают и не должны его сбрасывать.
+                if 'is_invalid' in request.data:
+                    defaults['is_invalid'] = parse_1c_bool(request.data.get('is_invalid'))
+
                 item_image, created = ItemImage.objects.update_or_create(
                     id=image_id,
-                    defaults={
-                        'item': item_obj,
-                        'image_path': image_file,
-                        'is_main': is_main,
-                    }
+                    defaults=defaults,
                 )
 
             # Удаляем старый файл с диска, если при обновлении имя файла изменилось —
@@ -823,6 +919,61 @@ class ItemImageUploadView(Base1cAPIView):
         return Response(
             {"ok": True, "message": f"Картинка {action_word} и привязана к товару '{item_obj.name}'"},
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        )
+
+
+
+class Sync1cUpdateImagesValidityView(Base1cAPIView):
+    """1С помечает картинки действительными/недействительными, не перезаливая файлы.
+
+    Тело — массив [{"id": "<GUID картинки>", "is_invalid": true}, ...].
+    Недействительная картинка исчезает из каталога, но остаётся в базе: чтобы вернуть
+    её обратно, достаточно прислать is_invalid=false. Для полного удаления вместе с
+    файлом по-прежнему используется image_item_upload/ с пустым полем `image`.
+    """
+
+    def post(self, request):
+        payload = request.data
+
+        if not isinstance(payload, list):
+            return Response(
+                {"ok": False, "message": "Ожидается массив JSON в теле запроса (список картинок)"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not payload:
+            return Response({"ok": True, "message": "Массив пуст"}, status=status.HTTP_200_OK)
+
+        # Собираем два списка id: что скрыть и что вернуть в каталог.
+        to_invalid, to_valid, skipped = [], [], 0
+        for row in payload:
+            if not isinstance(row, dict) or not row.get("id"):
+                skipped += 1
+                continue
+            (to_invalid if parse_1c_bool(row.get("is_invalid")) else to_valid).append(row["id"])
+
+        updated = 0
+        affected_org_ids = set()
+        with transaction.atomic():
+            for ids, flag in ((to_invalid, True), (to_valid, False)):
+                if not ids:
+                    continue
+                qs = ItemImage.objects.filter(id__in=ids)
+                # Организации собираем до update — после него выборка уже не нужна,
+                # но кэш каталога сбросить надо именно у затронутых филиалов.
+                affected_org_ids.update(qs.values_list('item__organization_id', flat=True))
+                updated += qs.update(is_invalid=flag)
+
+        bump_catalog_version(affected_org_ids)
+
+        if skipped:
+            return Response(
+                {"ok": False, "message": f"Обновлено картинок: {updated}. Пропущено (нет id): {skipped}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        return Response(
+            {"ok": True, "message": f"Успешно обновлено картинок: {updated}"},
+            status=status.HTTP_200_OK
         )
 
 

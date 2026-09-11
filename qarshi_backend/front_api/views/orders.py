@@ -2,6 +2,7 @@ from rest_framework import viewsets, status, mixins
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.db import transaction
+from decimal import Decimal
 
 # Импортируем модели строго по вашей структуре
 from sync_1c.models import Order, OrderItem, UserProfile
@@ -37,6 +38,7 @@ class FrontendOrderViewSet(mixins.CreateModelMixin,
         if self.action == 'retrieve':
             qs = qs.prefetch_related(
                 'items__item__images',
+                'items__item__packages',
                 'items__item__prices__price_type',
                 'items__item__item_type',
                 'items__item__stocks',
@@ -74,7 +76,7 @@ class FrontendOrderViewSet(mixins.CreateModelMixin,
         cart_items = CartItem.objects.filter(
             user=user,
             organization=self.current_organization
-        ).select_related('item').prefetch_related('item__prices__price_type')
+        ).select_related('item', 'package').prefetch_related('item__prices__price_type')
 
         if not cart_items.exists():
             return Response(
@@ -106,17 +108,27 @@ class FrontendOrderViewSet(mixins.CreateModelMixin,
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # Если цена есть, спокойно считаем сумму строки
-            item_total_amount = price * cart_item.quantity
+            # Количество в корзине уже в базовых единицах, а цена — за базовую единицу.
+            base_quantity = Decimal(cart_item.quantity)
+            item_total_amount = Decimal(str(price)) * base_quantity
             total_order_amount += item_total_amount
+
+            # Снимок упаковки: 1С получает привычное количество в базовых единицах,
+            # а эти поля только объясняют, как клиент его набрал («2 коробки по 10 шт»).
+            package = cart_item.package
+            package_ratio = package.quantity if package and package.quantity > 0 else Decimal('1')
 
             # Собираем объекты позиций заказа в память (пока без привязки к order)
             order_items_to_create.append(
                 OrderItem(
                     item=product,
-                    quantity=cart_item.quantity,
+                    quantity=base_quantity,
                     price=price,
-                    total_amount=item_total_amount
+                    total_amount=item_total_amount,
+                    package_id=package.id if package else None,
+                    package_name=package.name if package else '',
+                    package_ratio=package_ratio,
+                    package_count=base_quantity / package_ratio,
                 )
             )
 

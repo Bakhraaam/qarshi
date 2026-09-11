@@ -14,10 +14,19 @@ class ProductDetailScreen extends StatelessWidget {
   final Product product;
   final ValueChanged<num> onQuantityChanged;
 
+  /// Единица, которой клиент набирает товар (null — базовая).
+  final String? packageId;
+
+  /// Клиент переключил единицу: приходит новая упаковка и пересчитанное
+  /// количество в базовых единицах.
+  final void Function(String? packageId, num quantity)? onPackageChanged;
+
   const ProductDetailScreen({
     super.key,
     required this.product,
     required this.onQuantityChanged,
+    this.packageId,
+    this.onPackageChanged,
   });
 
   /// Открывает карточку товара поверх текущего экрана.
@@ -25,12 +34,16 @@ class ProductDetailScreen extends StatelessWidget {
     BuildContext context, {
     required Product product,
     required ValueChanged<num> onQuantityChanged,
+    String? packageId,
+    void Function(String? packageId, num quantity)? onPackageChanged,
   }) {
     return Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ProductDetailScreen(
           product: product,
           onQuantityChanged: onQuantityChanged,
+          packageId: packageId,
+          onPackageChanged: onPackageChanged,
         ),
       ),
     );
@@ -127,10 +140,7 @@ class ProductDetailScreen extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: const Color(0xFFE2E8F0)),
       ),
-      child: ProductGallery(
-        images: product.gallery,
-        showArrows: showArrows,
-      ),
+      child: ProductGallery(images: product.gallery, showArrows: showArrows),
     );
   }
 
@@ -172,10 +182,15 @@ class ProductDetailScreen extends StatelessWidget {
                 _AttributeRow(label: 'Артикул', value: product.articul),
               _AttributeRow(
                 label: 'Остаток',
-                value:
-                    '${product.stock.toStringAsFixed(0)} ${product.unit}',
+                value: '${product.stock.toStringAsFixed(0)} ${product.unit}',
               ),
               _AttributeRow(label: 'Единица измерения', value: product.unit),
+              // Цена всегда за базовую единицу — упаковка только множитель.
+              for (final package in product.packages)
+                _AttributeRow(
+                  label: package.name,
+                  value: '${formatNumber(package.quantity)} ${product.unit}',
+                ),
             ],
           ),
         ),
@@ -187,11 +202,18 @@ class ProductDetailScreen extends StatelessWidget {
     return ValueListenableBuilder<Map<String, num>>(
       valueListenable: cartNotifier,
       builder: (context, cart, _) {
-        return ProductCartControl(
-          product: product,
-          quantity: cart[product.id] ?? 0,
-          onQuantityChanged: onQuantityChanged,
-          dense: false,
+        return ValueListenableBuilder<Map<String, String>>(
+          valueListenable: cartPackageNotifier,
+          builder: (context, packages, _) {
+            return ProductCartControl(
+              product: product,
+              quantity: cart[product.id] ?? 0,
+              packageId: packages[product.id] ?? packageId,
+              onQuantityChanged: onQuantityChanged,
+              onPackageChanged: onPackageChanged,
+              dense: false,
+            );
+          },
         );
       },
     );

@@ -18,6 +18,23 @@ void setCartQuantityLocal(String productId, num quantity) {
   cartNotifier.value = next;
 }
 
+/// Выбранная клиентом единица набора по товарам: productId -> packageId.
+/// null/отсутствует — товар набирается базовой единицей. Живёт отдельно от
+/// количеств, потому что выбор единицы не меняет ни цену, ни сумму корзины.
+final ValueNotifier<Map<String, String>> cartPackageNotifier =
+    ValueNotifier<Map<String, String>>(<String, String>{});
+
+/// Помощник: запомнить выбранную упаковку товара (null — базовая единица).
+void setCartPackageLocal(String productId, String? packageId) {
+  final next = Map<String, String>.from(cartPackageNotifier.value);
+  if (packageId == null || packageId.isEmpty) {
+    next.remove(productId);
+  } else {
+    next[productId] = packageId;
+  }
+  cartPackageNotifier.value = next;
+}
+
 String AppName = 'Qarshi app';
 String tokenAccess = '';
 UserModel? currentUser;

@@ -188,6 +188,37 @@ class ProductCategory {
   }
 }
 
+/// Упаковка товара: блок, коробка, канистра.
+///
+/// Цена в каталоге ВСЕГДА за базовую единицу (`Product.unit`), а упаковка — только
+/// множитель: «Коробка» с quantity = 10 значит, что 2 коробки это 20 базовых единиц.
+class ItemPackage {
+  final String id;
+  final String name;
+
+  /// Сколько базовых единиц товара в одной упаковке.
+  final num quantity;
+  final bool isDefault;
+
+  const ItemPackage({
+    required this.id,
+    required this.name,
+    required this.quantity,
+    this.isDefault = false,
+  });
+
+  factory ItemPackage.fromJson(Map<String, dynamic> json) {
+    final raw = num.tryParse(json['quantity'].toString()) ?? 1;
+    return ItemPackage(
+      id: json['id'].toString(),
+      name: json['name']?.toString() ?? '',
+      // Нулевой или отрицательный множитель сделал бы деление бессмысленным.
+      quantity: raw > 0 ? raw : 1,
+      isDefault: json['is_default'] == true,
+    );
+  }
+}
+
 class Product {
   final String id;
   final String name;
@@ -204,6 +235,9 @@ class Product {
   final String unit;
   final num stock; // Остаток
 
+  /// Варианты фасовки сверх базовой единицы. Пусто — товар продаётся только `unit`.
+  final List<ItemPackage> packages;
+
   Product({
     required this.id,
     required this.name,
@@ -216,7 +250,25 @@ class Product {
     required this.unit,
     required this.stock,
     this.images = const [],
+    this.packages = const [],
   });
+
+  /// Упаковка по её id; null — базовая единица (или упаковку уже удалили из 1С).
+  ItemPackage? packageById(String? packageId) {
+    if (packageId == null || packageId.isEmpty) return null;
+    for (final package in packages) {
+      if (package.id == packageId) return package;
+    }
+    return null;
+  }
+
+  /// Какую единицу подставить, когда клиент ещё ничего не выбирал.
+  ItemPackage? get defaultPackage {
+    for (final package in packages) {
+      if (package.isDefault) return package;
+    }
+    return null;
+  }
 
   /// Картинки для галереи: список с бэкенда, а если он пуст — одна главная картинка.
   List<String> get gallery {
@@ -244,6 +296,12 @@ class Product {
       articul: json['articul']?.toString() ?? '',
       unit: json['unit']?.toString() ?? '',
       stock: json['stock'] ?? 0,
+      packages: json['packages'] is List
+          ? (json['packages'] as List)
+                .whereType<Map<String, dynamic>>()
+                .map(ItemPackage.fromJson)
+                .toList()
+          : const [],
     );
   }
 }
@@ -258,22 +316,42 @@ class PaginatedProducts {
 
 class CartItem {
   final Product product;
+
+  /// Количество в БАЗОВЫХ единицах товара — как и на бэкенде.
   num quantity;
   num total;
+
+  /// Упаковка, которой позиция набрана (null — базовая единица).
+  final String? packageId;
+
   CartItem({
     required this.product,
     required this.quantity,
     required this.total,
+    this.packageId,
   });
 
   // Рассчитываем стоимость этой позиции локально
   num get totalWithItem => product.price * quantity;
+
+  /// Упаковка позиции (null — набрана базовой единицей).
+  ItemPackage? get package => product.packageById(packageId);
+
+  /// Шаг счётчика в базовых единицах: 1 шт или целая коробка.
+  num get step => package?.quantity ?? 1;
+
+  /// Количество в выбранной единице: 20 шт при коробке по 10 — это 2 коробки.
+  num get displayQuantity => quantity / step;
+
+  /// Подпись единицы рядом со счётчиком.
+  String get unitLabel => package?.name ?? product.unit;
 
   factory CartItem.fromJson(Map<String, dynamic> json) {
     return CartItem(
       product: Product.fromJson(json['product']),
       quantity: num.parse(json['quantity'].toString()) ?? 1,
       total: num.parse(json['total'].toString()) ?? 0,
+      packageId: json['package_id']?.toString(),
     );
   }
 
@@ -291,15 +369,34 @@ class CartItem {
 
 class OrderItem {
   final Product product;
+
+  /// Количество в БАЗОВЫХ единицах товара, цена — за ту же базовую единицу.
   num quantity;
   num price;
   num totalAmount;
+
+  /// Снимок упаковки на момент заказа: чем клиент набирал позицию.
+  /// Пусто — позиция набрана базовыми единицами.
+  final String packageName;
+  final num packageCount;
+
   OrderItem({
     required this.product,
     required this.quantity,
     required this.price,
     required this.totalAmount,
+    this.packageName = '',
+    this.packageCount = 0,
   });
+
+  /// Количество для показа: «2 коробки» вместо «20 шт», если упаковка была.
+  String get quantityLabel {
+    if (packageName.isEmpty || packageCount <= 0) {
+      return '${formatNumber(quantity)} ${product.unit}';
+    }
+    return '${formatNumber(packageCount)} $packageName '
+        '(${formatNumber(quantity)} ${product.unit})';
+  }
 
   // Рассчитываем стоимость этой позиции локально
   num get totalWithItem => product.price * quantity;
@@ -310,6 +407,8 @@ class OrderItem {
       quantity: num.parse(json['quantity'].toString()),
       price: num.parse(json['price'].toString()),
       totalAmount: num.parse(json['total_amount'].toString()),
+      packageName: json['package_name']?.toString() ?? '',
+      packageCount: num.tryParse(json['package_count'].toString()) ?? 0,
     );
   }
 
