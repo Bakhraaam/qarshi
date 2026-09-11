@@ -9,6 +9,7 @@ from rest_framework.authtoken.models import Token
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from front_api.bot import api, handlers, polling
+from sync_1c.views import item_package_pk
 from front_api.models import CartItem, TelegramAccount
 from sync_1c.models import (
     Item, ItemImage, ItemPackage, ItemStock, ItemType, Organization,
@@ -291,8 +292,10 @@ class ItemPackageFlowTests(TestCase):
             organization=cls.org,
         )
         ItemStock.objects.create(item=cls.item, organization=cls.org, stock=Decimal("500"))
+        cls.box_guid = uuid.uuid4()
         cls.box = ItemPackage.objects.create(
-            id=uuid.uuid4(), item=cls.item, name="Коробка", quantity=Decimal("10"),
+            id=item_package_pk(cls.item.id, cls.box_guid), guid_1c=cls.box_guid,
+            item=cls.item, name="Коробка", quantity=Decimal("10"),
         )
 
     def setUp(self):
@@ -356,8 +359,10 @@ class ItemPackageFlowTests(TestCase):
     def test_foreign_package_is_ignored(self):
         other_item = Item.objects.create(id=uuid.uuid4(), item_type=self.item_type,
                                          name="Другой", unit="шт", organization=self.org)
-        foreign = ItemPackage.objects.create(id=uuid.uuid4(), item=other_item,
-                                             name="Блок", quantity=Decimal("5"))
+        foreign_guid = uuid.uuid4()
+        foreign = ItemPackage.objects.create(
+            id=item_package_pk(other_item.id, foreign_guid), guid_1c=foreign_guid,
+            item=other_item, name="Блок", quantity=Decimal("5"))
 
         self.client.post(self.api("cart/"), {
             "item_id": str(self.item.id), "quantity": 5, "package_id": str(foreign.id),
@@ -376,7 +381,7 @@ class ItemPackageFlowTests(TestCase):
 
         order_item = OrderItem.objects.get()
         self.assertEqual(order_item.quantity, Decimal("30.00"))
-        self.assertEqual(order_item.package_id, self.box.id)
+        self.assertEqual(order_item.package_id, self.box_guid)
         self.assertEqual(order_item.package_name, "Коробка")
         self.assertEqual(order_item.package_ratio, Decimal("10.000"))
         self.assertEqual(order_item.package_count, Decimal("3.000"))
@@ -414,17 +419,62 @@ class Sync1cPackagesAndImagesTests(TestCase):
         }
         self.assertEqual(self.post("items/", [row]).status_code, 200)
         self.assertEqual(ItemPackage.objects.count(), 2)
-        self.assertTrue(ItemPackage.objects.get(id=box_id).is_default)
+        box_pk = item_package_pk(self.item.id, box_id)
+        self.assertTrue(ItemPackage.objects.get(id=box_pk).is_default)
 
         # Повторная выгрузка без «Блока»: он исчезает, «Коробка» переименовывается.
         row["packages"] = [{"id": str(box_id), "name": "Ящик", "quantity": "12"}]
         self.assertEqual(self.post("items/", [row]).status_code, 200)
         self.assertEqual([p.name for p in ItemPackage.objects.all()], ["Ящик"])
-        self.assertEqual(ItemPackage.objects.get(id=box_id).quantity, Decimal("12.000"))
+        self.assertEqual(ItemPackage.objects.get(id=box_pk).quantity, Decimal("12.000"))
+
+    def test_same_1c_unit_shared_by_several_items(self):
+        """1С шлёт ОДИН GUID «Канистра 4л» сразу у всех четырёхлитровых товаров.
+
+        Раньше это был первичный ключ, и такой пакет ронял обмен ошибкой Postgres
+        «ON CONFLICT DO UPDATE command cannot affect row a second time».
+        """
+        second = Item.objects.create(id=uuid.uuid4(), item_type=self.item_type,
+                                     name="Второй", unit="л", organization=self.org)
+        shared_guid = uuid.uuid4()
+        rows = [
+            {"id": str(item.id), "organization_id": str(self.org.id),
+             "item_type": str(self.item_type.id), "name": item.name, "unit": "л",
+             "packages": [{"id": str(shared_guid), "name": "Канистра 4л", "quantity": 4}]}
+            for item in (self.item, second)
+        ]
+
+        self.assertEqual(self.post("items/", rows).status_code, 200)
+
+        # Две отдельные упаковки — по одной на товар, обе с одним GUID из 1С.
+        self.assertEqual(ItemPackage.objects.count(), 2)
+        self.assertEqual(ItemPackage.objects.filter(guid_1c=shared_guid).count(), 2)
+        self.assertEqual(
+            set(ItemPackage.objects.values_list('item_id', flat=True)),
+            {self.item.id, second.id},
+        )
+
+        # Повторная выгрузка того же пакета обновляет, а не плодит строки.
+        self.assertEqual(self.post("items/", rows).status_code, 200)
+        self.assertEqual(ItemPackage.objects.count(), 2)
+
+    def test_duplicate_package_inside_one_item_is_collapsed(self):
+        guid = uuid.uuid4()
+        row = {
+            "id": str(self.item.id), "organization_id": str(self.org.id),
+            "item_type": str(self.item_type.id), "name": "Товар", "unit": "шт",
+            "packages": [
+                {"id": str(guid), "name": "Коробка", "quantity": 10},
+                {"id": str(guid), "name": "Коробка", "quantity": 10},
+            ],
+        }
+        self.assertEqual(self.post("items/", [row]).status_code, 200)
+        self.assertEqual(ItemPackage.objects.count(), 1)
 
     def test_packages_untouched_when_key_absent(self):
-        ItemPackage.objects.create(id=uuid.uuid4(), item=self.item, name="Коробка",
-                                   quantity=Decimal("10"))
+        guid = uuid.uuid4()
+        ItemPackage.objects.create(id=item_package_pk(self.item.id, guid), guid_1c=guid,
+                                   item=self.item, name="Коробка", quantity=Decimal("10"))
         row = {"id": str(self.item.id), "organization_id": str(self.org.id),
                "item_type": str(self.item_type.id), "name": "Товар", "unit": "шт"}
         self.assertEqual(self.post("items/", [row]).status_code, 200)

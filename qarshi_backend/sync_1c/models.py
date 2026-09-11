@@ -149,8 +149,15 @@ class ItemPackage(models.Model):
     множитель: «Коробка = 10 шт» значит, что 2 коробки это 20 шт по цене за штуку.
     Базовая единица отдельной записью не хранится — она и так есть в `Item.unit`.
     """
+    # Ключ СИНТЕТИЧЕСКИЙ, а не GUID из 1С. В 1С упаковка — это общая единица измерения
+    # («Канистра 4л»), и один и тот же GUID приходит сразу у нескольких товаров. Делать
+    # его первичным ключом нельзя: строки разных товаров схлопывались бы в одну.
+    # Поэтому ключ детерминированно выводим из пары (товар, GUID) — см. item_package_pk.
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False,
-                          verbose_name="Уникальный Идентификатор 1С")
+                          verbose_name="Идентификатор упаковки товара")
+    # GUID единицы измерения в 1С — тот, что реально прислал обмен. Не уникален:
+    # повторяется у всех товаров с такой же фасовкой.
+    guid_1c = models.UUIDField(db_index=True, verbose_name="GUID единицы измерения в 1С")
     item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name='packages',
                              verbose_name="Товар")
     name = models.CharField(max_length=100, verbose_name="Наименование упаковки")
@@ -167,9 +174,13 @@ class ItemPackage(models.Model):
         verbose_name = "Упаковка товара"
         verbose_name_plural = "Упаковки товаров"
         ordering = ['quantity', 'name']
+        # Ключ уже выведен из этой пары, ограничение делает правило явным в схеме.
+        unique_together = ('item', 'guid_1c')
 
     def __str__(self):
-        return f"{self.name} = {self.quantity} {self.item.unit or ''}".strip()
+        # Намеренно не трогаем self.item: __str__ зовётся и до сохранения товара
+        # (например, при отладочном выводе пакета из 1С), и лишний запрос там падал.
+        return f"{self.name} = {self.quantity}"
 
 
 # 5. Виды цен
@@ -338,7 +349,9 @@ class OrderItem(models.Model):
     # а в истории заказа должно остаться то, что клиент реально выбирал.
     # `quantity` выше всегда в БАЗОВЫХ единицах — 1С разбирает заказ как раньше,
     # а поля ниже нужны только чтобы показать «2 коробки по 10 шт».
-    package_id = models.UUIDField(null=True, blank=True, verbose_name="ID упаковки в 1С")
+    # Именно GUID единицы измерения из 1С, а не наш внутренний ключ ItemPackage:
+    # заказ уезжает в 1С, и там понимают только свой идентификатор.
+    package_id = models.UUIDField(null=True, blank=True, verbose_name="GUID единицы измерения в 1С")
     package_name = models.CharField(max_length=100, blank=True, default="", verbose_name="Упаковка")
     package_ratio = models.DecimalField(max_digits=12, decimal_places=3, default=1,
                                         verbose_name="Базовых единиц в упаковке")

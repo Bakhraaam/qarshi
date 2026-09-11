@@ -1,0 +1,15 @@
+cd ~/full_stack/qarshi/qarshi_front
+rm -rf build/web
+
+APP_VERSION=$(awk '/^version:/ {print $2; exit}' pubspec.yaml)
+APP_BUILD="$(git rev-parse --short HEAD)-$(date +%y%m%d-%H%M)"
+
+flutter build web --wasm \
+  --dart-define=APP_VERSION="$APP_VERSION" \
+  --dart-define=APP_BUILD="$APP_BUILD"
+
+find build/web -name .DS_Store -delete
+rm -f build/web/flutter_service_worker.js
+tar -czf ~/qarshi-web.tar.gz -C build/web .
+
+gh release upload web-build ~/qarshi-web.tar.gz -R Bakhraaam/qarshi --clobber

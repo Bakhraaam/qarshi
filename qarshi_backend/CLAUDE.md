@@ -104,11 +104,17 @@ units per box). Consequences worth remembering before touching cart or order cod
   removed by a sync does not take the cart line with it). `POST cart/` accepts an optional `package_id`.
 - `OrderItem` keeps a **copy** of the package (`package_id`, `package_name`, `package_ratio`,
   `package_count`) rather than a FK: renaming or retiring a package in 1C must not rewrite history.
+  `package_id` there is 1C's own `guid_1c`, not our row id — the order is read by 1C.
   `orders/pull` exposes those four fields alongside the unchanged `quantity`.
 - 1C pushes packages inside `items/`: a row may carry `packages: [{id, name, quantity, is_default,
   is_invalid}]`. Same key semantics as `images` — key absent means "don't touch", `[]` means "base unit
-  only". Packages are upserted by their 1C GUID (not recreated), and ones missing from the payload are
-  deleted.
+  only". Packages are upserted (not recreated), and ones missing from the payload are deleted.
+- **`ItemPackage.id` is NOT the GUID 1C sends.** In 1C a package is a shared unit of measure, so the
+  same GUID (`Канистра 4л`) arrives on every 4-litre product. Keying rows by it collapsed different
+  products into one row and made the upsert fail with Postgres `ON CONFLICT DO UPDATE command cannot
+  affect row a second time`. The 1C value lives in `guid_1c`, and the primary key is derived from the
+  pair via `sync_1c.views.item_package_pk` (uuid5), which keeps the upsert idempotent. Never key a new
+  1C-sourced child row on a GUID without checking whether 1C reuses it across parents.
 
 ### Product images
 `items/` still accepts `images` as a list of path strings, and now also as objects

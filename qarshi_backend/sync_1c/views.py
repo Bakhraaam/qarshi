@@ -165,32 +165,56 @@ def build_item_images(item_id, raw_images):
     return images
 
 
+# Пространство имён для ключей упаковок. Фиксированное: от него зависит, что
+# повторная выгрузка той же упаковки обновит строку, а не создаст новую.
+ITEM_PACKAGE_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, 'qarshi:item-package')
+
+
+def item_package_pk(item_id, guid_1c):
+    """Ключ упаковки — из пары (товар, GUID единицы измерения из 1С).
+
+    В 1С «Канистра 4л» это одна общая единица измерения, и её GUID приходит сразу
+    у всех четырёхлитровых товаров. Если писать его в первичный ключ, все они
+    схлопываются в одну строку, а INSERT ... ON CONFLICT падает с
+    «cannot affect row a second time». Детерминированный uuid5 разводит их по
+    строкам и при этом оставляет апсерт идемпотентным.
+    """
+    return uuid.uuid5(ITEM_PACKAGE_NAMESPACE, f"{item_id}:{guid_1c}")
+
+
 def build_item_packages(item_id, raw_packages):
     """Упаковки товара из массива `packages` в строке 1С.
 
     Элемент — объект {"id", "name", "quantity", "is_default", "is_invalid"}, где
-    quantity — сколько БАЗОВЫХ единиц товара в одной упаковке. Строки без id или
-    с неположительным quantity пропускаем: такая упаковка ничего не умножает.
+    `id` — GUID единицы измерения в 1С, а quantity — сколько БАЗОВЫХ единиц товара
+    в одной упаковке. Строки без id или с неположительным quantity пропускаем:
+    такая упаковка ничего не умножает.
     """
-    packages = []
+    packages = {}
     for raw in raw_packages or []:
         if not isinstance(raw, dict):
             continue
-        package_id = raw.get('id')
+        guid_1c = raw.get('id')
         quantity = parse_1c_decimal(raw.get('quantity'))
-        if not package_id or quantity <= 0:
+        if not guid_1c or quantity <= 0:
             continue
-        packages.append(
-            ItemPackage(
-                id=package_id,
-                item_id=item_id,
-                name=(raw.get('name') or '').strip() or 'Упаковка',
-                quantity=quantity,
-                is_default=parse_1c_bool(raw.get('is_default')),
-                is_invalid=parse_1c_bool(raw.get('is_invalid')),
-            )
+        try:
+            guid_1c = uuid.UUID(str(guid_1c))
+        except (ValueError, AttributeError, TypeError):
+            continue
+        # Ключом словаря гасим повтор одной и той же упаковки внутри одного товара:
+        # в один INSERT дважды один ключ отдавать нельзя.
+        pk = item_package_pk(item_id, guid_1c)
+        packages[pk] = ItemPackage(
+            id=pk,
+            guid_1c=guid_1c,
+            item_id=item_id,
+            name=(raw.get('name') or '').strip() or 'Упаковка',
+            quantity=quantity,
+            is_default=parse_1c_bool(raw.get('is_default')),
+            is_invalid=parse_1c_bool(raw.get('is_invalid')),
         )
-    return packages
+    return list(packages.values())
 
 
 class Sync1cUpdateItemsView(Base1cAPIView):
@@ -289,19 +313,21 @@ class Sync1cUpdateItemsView(Base1cAPIView):
                         if images_to_create:
                             ItemImage.objects.bulk_create(images_to_create, batch_size=SYNC_BATCH_SIZE)
 
-                    # Упаковки не пересоздаём, а апсертим по GUID из 1С: на них ссылаются
-                    # корзины, и пересоздание молча обнулило бы выбранную клиентом упаковку.
-                    # Пропавшие из пакета упаковки удаляем — CartItem.package это SET_NULL,
-                    # а в заказах упаковка лежит копией, поэтому история не пострадает.
+                    # Упаковки не пересоздаём, а апсертим по ключу (товар + GUID из 1С):
+                    # на них ссылаются корзины, и пересоздание молча обнулило бы
+                    # выбранную клиентом упаковку. Пропавшие из пакета удаляем —
+                    # CartItem.package это SET_NULL, а в заказах упаковка лежит копией,
+                    # поэтому история не пострадает.
                     if item_ids_with_packages:
-                        kept_ids = [p.id for p in packages_to_upsert]
+                        kept_ids = {p.id for p in packages_to_upsert}
                         ItemPackage.objects.filter(item_id__in=item_ids_with_packages) \
                             .exclude(id__in=kept_ids).delete()
                         if packages_to_upsert:
                             ItemPackage.objects.bulk_create(
                                 packages_to_upsert, update_conflicts=True,
                                 unique_fields=['id'],
-                                update_fields=['item_id', 'name', 'quantity', 'is_default', 'is_invalid'],
+                                update_fields=['guid_1c', 'item_id', 'name', 'quantity',
+                                               'is_default', 'is_invalid'],
                                 batch_size=SYNC_BATCH_SIZE,
                             )
         except IntegrityError:

@@ -76,7 +76,8 @@ class ItemImageInline(admin.TabularInline):
 class ItemPackageInline(admin.TabularInline):
     model = ItemPackage
     extra = 0
-    fields = ['name', 'quantity', 'is_default', 'is_invalid']
+    fields = ['name', 'quantity', 'is_default', 'is_invalid', 'guid_1c']
+    readonly_fields = ['guid_1c']
 
 
 # Настройка отображения цен внутри карточки товара
@@ -417,15 +418,15 @@ class ItemImageAdmin(admin.ModelAdmin):
 
 @admin.register(ItemPackage)
 class ItemPackageAdmin(admin.ModelAdmin):
-    list_display = ['name', 'item', 'quantity', 'base_unit', 'is_default', 'is_invalid']
+    list_display = ['name', 'item', 'quantity', 'base_unit', 'is_default', 'is_invalid', 'guid_1c']
     list_display_links = ['name']
     list_filter = ['item__organization', 'is_default', 'is_invalid']
     list_editable = ['is_default', 'is_invalid']
-    search_fields = ['name', 'item__name', 'item__articul', 'item__code', 'id']
+    search_fields = ['name', 'item__name', 'item__articul', 'item__code', 'id', 'guid_1c']
     list_select_related = ['item']
     ordering = ['item__name', 'quantity']
     list_per_page = 50
-    readonly_fields = ['id']
+    readonly_fields = ['id', 'guid_1c']
 
     @admin.display(description="Базовая единица")
     def base_unit(self, obj):
