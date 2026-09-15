@@ -1,38 +1,76 @@
 import 'package:flutter/foundation.dart';
 import 'package:qarshi/core/data/models.dart';
 
-/// Единый источник истины по количествам товаров в корзине: productId -> quantity.
+/// Единый источник истины по строкам корзины: cartLineKey(товар, единица) -> количество.
+/// Количество в базовых единицах. Один товар может занимать несколько строк —
+/// «5 коробок» и «3 шт» лежат под разными ключами.
 /// Каталог и корзина пишут сюда при любом изменении, а бейджи/карточки слушают
 /// через ValueListenableBuilder — так количество синхронно на всех экранах.
 final ValueNotifier<Map<String, num>> cartNotifier =
     ValueNotifier<Map<String, num>>(<String, num>{});
 
-/// Помощник: обновить одну позицию в глобальной корзине (0/меньше — удалить).
-void setCartQuantityLocal(String productId, num quantity) {
+/// Помощник: обновить одну строку в глобальной корзине (0/меньше — удалить).
+void setCartQuantityLocal(String productId, String? packageId, num quantity) {
+  final key = cartLineKey(productId, packageId);
   final next = Map<String, num>.from(cartNotifier.value);
   if (quantity <= 0) {
-    next.remove(productId);
+    next.remove(key);
   } else {
-    next[productId] = quantity;
+    next[key] = quantity;
   }
   cartNotifier.value = next;
 }
 
-/// Выбранная клиентом единица набора по товарам: productId -> packageId.
-/// null/отсутствует — товар набирается базовой единицей. Живёт отдельно от
-/// количеств, потому что выбор единицы не меняет ни цену, ни сумму корзины.
-final ValueNotifier<Map<String, String>> cartPackageNotifier =
+/// Сколько базовых единиц товара лежит в строке этой единицы (0 — строки нет).
+num cartQuantityOf(
+  Map<String, num> cart,
+  String productId,
+  String? packageId,
+) => cart[cartLineKey(productId, packageId)] ?? 0;
+
+/// Единицы, в которых товар уже лежит в корзине (null — базовая единица).
+Iterable<String?> cartUnitsOf(Map<String, num> cart, String productId) sync* {
+  final prefix = '$productId|';
+  for (final key in cart.keys) {
+    if (!key.startsWith(prefix)) continue;
+    final packageId = key.substring(prefix.length);
+    yield packageId.isEmpty ? null : packageId;
+  }
+}
+
+/// Единица, выбранная в карточке товара: productId -> packageId ('' — базовая).
+/// Это только выбор на экране, в корзину он ничего не пишет: переключив единицу,
+/// клиент видит количество строки ЭТОЙ единицы или кнопку «В корзину».
+final ValueNotifier<Map<String, String>> selectedUnitNotifier =
     ValueNotifier<Map<String, String>>(<String, String>{});
 
-/// Помощник: запомнить выбранную упаковку товара (null — базовая единица).
-void setCartPackageLocal(String productId, String? packageId) {
-  final next = Map<String, String>.from(cartPackageNotifier.value);
-  if (packageId == null || packageId.isEmpty) {
-    next.remove(productId);
-  } else {
-    next[productId] = packageId;
+/// Запомнить выбранную в карточке единицу (null — базовая).
+void selectUnitLocal(String productId, String? packageId) {
+  selectedUnitNotifier.value = {
+    ...selectedUnitNotifier.value,
+    productId: packageId ?? '',
+  };
+}
+
+/// Какую единицу показывать в карточке товара.
+///
+/// Порядок: явный выбор клиента, затем единица, которой товар уже лежит в корзине,
+/// затем упаковка по умолчанию из 1С, иначе базовая единица.
+ItemPackage? resolveSelectedUnit(
+  Product product,
+  Map<String, String> selected,
+  Map<String, num> cart,
+) {
+  final chosen = selected[product.id];
+  if (chosen != null) {
+    return chosen.isEmpty ? null : product.packageById(chosen);
   }
-  cartPackageNotifier.value = next;
+  for (final packageId in cartUnitsOf(cart, product.id)) {
+    if (packageId == null) return null;
+    final package = product.packageById(packageId);
+    if (package != null) return package;
+  }
+  return product.defaultPackage;
 }
 
 String AppName = 'Qarshi app';

@@ -30,11 +30,11 @@ class _CatalogScreenState extends State<CatalogScreen> {
 
   List<ProductCategory> _categories = [];
   List<Product> _products = [];
-  late Map<String, num> _cartQuantities =
-      {}; // Перенесено наверх для правильной видимости
-  // Выбранная единица набора по товарам (productId -> packageId).
-  // Зеркало глобального cartPackageNotifier — как и с количествами.
-  Map<String, String> _cartPackages = {};
+  // Строки корзины: cartLineKey(товар, единица) -> базовые единицы.
+  // Зеркало глобального cartNotifier.
+  late Map<String, num> _cartQuantities = {};
+  // Единица, выбранная в карточке каждого товара. Зеркало selectedUnitNotifier.
+  Map<String, String> _selectedUnits = {};
 
   String? _selectedCategoryId;
   bool _isFirstLoad = true;
@@ -65,14 +65,14 @@ class _CatalogScreenState extends State<CatalogScreen> {
     // Слушаем глобальную корзину: если количества изменили на другом экране
     // (например, в /cart), синхронизируем карточки каталога.
     cartNotifier.addListener(_onGlobalCartChanged);
-    _cartPackages = Map<String, String>.from(cartPackageNotifier.value);
-    cartPackageNotifier.addListener(_onGlobalPackagesChanged);
+    _selectedUnits = Map<String, String>.from(selectedUnitNotifier.value);
+    selectedUnitNotifier.addListener(_onSelectedUnitsChanged);
   }
 
   @override
   void dispose() {
     cartNotifier.removeListener(_onGlobalCartChanged);
-    cartPackageNotifier.removeListener(_onGlobalPackagesChanged);
+    selectedUnitNotifier.removeListener(_onSelectedUnitsChanged);
     _scrollController.dispose();
     _searchController.dispose();
     _debounce?.cancel();
@@ -89,13 +89,17 @@ class _CatalogScreenState extends State<CatalogScreen> {
     });
   }
 
-  void _onGlobalPackagesChanged() {
+  void _onSelectedUnitsChanged() {
     if (!mounted) return;
-    if (mapEquals(_cartPackages, cartPackageNotifier.value)) return;
+    if (mapEquals(_selectedUnits, selectedUnitNotifier.value)) return;
     setState(() {
-      _cartPackages = Map<String, String>.from(cartPackageNotifier.value);
+      _selectedUnits = Map<String, String>.from(selectedUnitNotifier.value);
     });
   }
+
+  /// Единица, показанная сейчас в карточке товара (null — базовая).
+  ItemPackage? _unitOf(Product product) =>
+      resolveSelectedUnit(product, _selectedUnits, _cartQuantities);
 
   // Загружаем одновременно товары, категории и текущую корзину с сервера Django
   Future<void> _loadInitialDataAndCart() async {
@@ -125,7 +129,8 @@ class _CatalogScreenState extends State<CatalogScreen> {
       ]);
 
       _categories = results[0] as List<ProductCategory>;
-      _cartQuantities.addAll(results[1] as Map<String, num>);
+      // Заменяем, а не дополняем: строка, удалённая на другом экране, не должна остаться.
+      _cartQuantities = Map<String, num>.from(results[1] as Map<String, num>);
       // Публикуем актуальную корзину с сервера в глобальный источник (бейдж/др. экраны).
       cartNotifier.value = Map<String, num>.from(_cartQuantities);
 
@@ -190,51 +195,32 @@ class _CatalogScreenState extends State<CatalogScreen> {
     });
   }
 
-  // Обновление количества товара с отправкой запросов на бэкенд.
-  // newQuantity всегда в базовых единицах товара; packageId — чем клиент набирал.
+  // Обновление ОДНОЙ строки корзины: товар в конкретной единице (null — базовая).
+  // newQuantity всегда в базовых единицах товара. Строки других единиц не трогаем:
+  // «5 коробок» и «3 шт» одного товара живут независимо.
   Future<void> _updateCartQuantity(
     Product product,
-    num newQuantity, {
-    String? packageId,
-    bool packageChanged = false,
-  }) async {
+    ItemPackage? package,
+    num newQuantity,
+  ) async {
     if (newQuantity < 0) return;
 
-    if (packageChanged) {
-      setCartPackageLocal(product.id, packageId);
-    }
-    final selectedPackageId = packageChanged
-        ? packageId
-        : cartPackageNotifier.value[product.id];
+    final success = await _api.updateCartItem(
+      product.id,
+      newQuantity,
+      packageId: package?.id,
+    );
+    if (!success || !mounted) return;
 
-    if (newQuantity == 0) {
-      final success = await _api.updateCartItem(product.id, 0);
-      if (success) {
-        setState(() => _cartQuantities.remove(product.id));
-        setCartQuantityLocal(product.id, 0);
+    final key = cartLineKey(product.id, package?.id);
+    setState(() {
+      if (newQuantity == 0) {
+        _cartQuantities.remove(key);
+      } else {
+        _cartQuantities[key] = newQuantity;
       }
-    } else {
-      // if (newQuantity > product.stock) {
-      //   ScaffoldMessenger.of(context).showSnackBar(
-      //     SnackBar(
-      //       content: Text(
-      //         'Доступно только ${product.stock.toStringAsFixed(0)} шт.',
-      //       ),
-      //     ),
-      //   );
-      //   return;
-      // }
-
-      final success = await _api.updateCartItem(
-        product.id,
-        newQuantity,
-        packageId: selectedPackageId,
-      );
-      if (success) {
-        setState(() => _cartQuantities[product.id] = newQuantity);
-        setCartQuantityLocal(product.id, newQuantity);
-      }
-    }
+    });
+    setCartQuantityLocal(product.id, package?.id, newQuantity);
   }
 
   Future<void> _applyNewFilters() async {
@@ -545,36 +531,28 @@ class _CatalogScreenState extends State<CatalogScreen> {
           ),
           itemBuilder: (context, index) {
             final product = _products[index];
-            final quantity = _cartQuantities[product.id] ?? 0;
+            final unit = _unitOf(product);
 
             return _ProductCard(
               // Ключ по товару: при смене фильтра/поиска сетка не переиспользует
               // состояние галереи и счётчика от товара, стоявшего на этом месте.
               key: ValueKey(product.id),
               product: product,
-              quantity: quantity,
+              package: unit,
+              // Количество строки ИМЕННО выбранной единицы: переключив «Коробка» на
+              // «шт», клиент видит штучную строку или кнопку «В корзину».
+              quantity: cartQuantityOf(_cartQuantities, product.id, unit?.id),
               compact: compactCard,
               imageHeight: imageHeight,
-              packageId: _cartPackages[product.id],
-              onQuantityChanged: (value) => _updateCartQuantity(product, value),
-              onPackageChanged: (packageId, value) => _updateCartQuantity(
-                product,
-                value,
-                packageId: packageId,
-                packageChanged: true,
-              ),
+              onQuantityChanged: (value) =>
+                  _updateCartQuantity(product, unit, value),
+              onPackageChanged: (package) =>
+                  selectUnitLocal(product.id, package?.id),
               onOpenDetails: () => ProductDetailScreen.open(
                 context,
                 product: product,
-                packageId: _cartPackages[product.id],
-                onQuantityChanged: (value) =>
-                    _updateCartQuantity(product, value),
-                onPackageChanged: (packageId, value) => _updateCartQuantity(
-                  product,
-                  value,
-                  packageId: packageId,
-                  packageChanged: true,
-                ),
+                onQuantityChanged: (package, value) =>
+                    _updateCartQuantity(product, package, value),
               ),
             );
           },
@@ -589,26 +567,28 @@ class _CatalogScreenState extends State<CatalogScreen> {
 /// Нажатие на картинку или название открывает подробную карточку товара.
 class _ProductCard extends StatelessWidget {
   final Product product;
+
+  /// Выбранная в карточке единица (null — базовая). От неё зависят цена и счётчик.
+  final ItemPackage? package;
+
+  /// Количество строки выбранной единицы, в базовых единицах.
   final num quantity;
   final bool compact;
   final double imageHeight;
   final ValueChanged<num> onQuantityChanged;
+  final ValueChanged<ItemPackage?> onPackageChanged;
   final VoidCallback onOpenDetails;
-
-  /// Единица, которой клиент набирает товар (null — базовая).
-  final String? packageId;
-  final void Function(String? packageId, num quantity) onPackageChanged;
 
   const _ProductCard({
     super.key,
     required this.product,
+    required this.package,
     required this.quantity,
     required this.compact,
     required this.imageHeight,
     required this.onQuantityChanged,
-    required this.onOpenDetails,
-    required this.packageId,
     required this.onPackageChanged,
+    required this.onOpenDetails,
   });
 
   @override
@@ -639,15 +619,11 @@ class _ProductCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    formatPrice(product.price),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: compact ? 15 : 17,
-                      fontWeight: FontWeight.w800,
-                      color: const Color(0xFF0F172A),
-                    ),
+                  // Цена за выбранную единицу: за коробку — цена штуки × вместимость.
+                  UnitPriceText(
+                    product: product,
+                    package: package,
+                    fontSize: compact ? 15 : 17,
                   ),
                   const SizedBox(height: 4),
                   GestureDetector(
@@ -680,8 +656,8 @@ class _ProductCard extends StatelessWidget {
                   const Spacer(),
                   ProductCartControl(
                     product: product,
+                    package: package,
                     quantity: quantity,
-                    packageId: packageId,
                     onQuantityChanged: onQuantityChanged,
                     onPackageChanged: onPackageChanged,
                   ),

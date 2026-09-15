@@ -1,7 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import SimpleRouter
 from .views.catalog import FrontendCategoryViewSet, FrontendProductViewSet
-from .views.auth import FrontendLoginView, FrontendRegisterView, TelegramAuthView
+from .views.auth import CurrentUserView, FrontendLoginView, FrontendRegisterView, TelegramAuthView
 from .views.cart import FrontendCartViewSet
 from .views.orders import FrontendOrderViewSet
 from .views.reports import ActReconciliationView
@@ -19,6 +19,7 @@ urlpatterns = [
     path('auth/register/', FrontendRegisterView.as_view(), name='frontend_register'),
     path('auth/login/', FrontendLoginView.as_view(), name='frontend_login'),
     path('auth/telegram/', TelegramAuthView.as_view(), name='frontend_login'),
+    path('auth/me/', CurrentUserView.as_view(), name='frontend_current_user'),
 
     path('reports/act/', ActReconciliationView.as_view(), name='frontend_act'),
 

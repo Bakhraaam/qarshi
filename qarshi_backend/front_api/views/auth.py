@@ -7,6 +7,8 @@ from rest_framework import status
 from sync_1c.models import UserProfile, PriceType
 from front_api.serializers.profile import UserAuthSerializer, TelegramAuthInputSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework.permissions import IsAuthenticated
 from django.db import transaction
 from front_api.models import TelegramAccount
 from front_api.views.base import BaseFrontendAPIView
@@ -255,3 +257,20 @@ class FrontendRegisterView(BaseFrontendAPIView):
                 {"ok": False, "message": f"Ошибка при регистрации: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+class CurrentUserView(BaseFrontendAPIView):
+    """
+    Актуальные данные вошедшего пользователя в текущем филиале.
+    URL: GET /api/v1/<str:org_prefix>/auth/me/
+
+    Тот же формат, что поле `user` в ответе входа. Нужен, чтобы клиент перечитал
+    профиль без повторного входа: например, 1С привязала контрагента, пока у
+    пользователя открыта корзина.
+    """
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [JWTAuthentication]
+
+    def get(self, request, *args, **kwargs):
+        serializer = UserAuthSerializer(request.user, context={'request': request, 'view': self})
+        return Response({"ok": True, "user": serializer.data}, status=status.HTTP_200_OK)

@@ -100,8 +100,16 @@ units per box). Consequences worth remembering before touching cart or order cod
 - `CartItem.quantity` and `OrderItem.quantity` are **always in base units**, so `price * quantity` stays
   correct everywhere and 1C keeps receiving the quantities it always did. The Flutter client does the
   multiplication and posts base units.
-- `CartItem.package` only records which unit the customer was counting in (`SET_NULL`, so a package
-  removed by a sync does not take the cart line with it). `POST cart/` accepts an optional `package_id`.
+- **A cart line is a product in one unit.** The same product can sit in the cart twice, «5 коробок» and
+  «3 шт», as two `CartItem` rows. Uniqueness is two conditional `UniqueConstraint`s (packaged line /
+  base line), because Postgres treats NULLs as distinct and a single constraint including `package`
+  would allow unlimited base lines. `POST cart/` addresses one line by `item_id` + `package_id`
+  (absent/null = base unit); `quantity: 0` deletes just that line, a foreign `package_id` is a 400.
+  The response carries the line's `package` object so the client never has to look it up in
+  `product.packages` (invalid packages are filtered out there but the line still exists).
+- `CartItem.package` is `SET_NULL`, but a sync never lets that fire blindly: before deleting packages
+  1C dropped, `sync_1c.views.release_cart_lines` merges those lines into the base-unit line, otherwise
+  SET_NULL would produce two base lines and the constraint would abort the whole `items/` import.
 - `OrderItem` keeps a **copy** of the package (`package_id`, `package_name`, `package_ratio`,
   `package_count`) rather than a FK: renaming or retiring a package in 1C must not rewrite history.
   `package_id` there is 1C's own `guid_1c`, not our row id — the order is read by 1C.
@@ -115,6 +123,13 @@ units per box). Consequences worth remembering before touching cart or order cod
   affect row a second time`. The 1C value lives in `guid_1c`, and the primary key is derived from the
   pair via `sync_1c.views.item_package_pk` (uuid5), which keeps the upsert idempotent. Never key a new
   1C-sourced child row on a GUID without checking whether 1C reuses it across parents.
+
+### Checkout and counterparty linkage
+`POST orders/` refuses (403, `"code": "unregistered"`, message = `Organization.unregistered_notice`) when
+the user's profile in this organization has no `guid_partner1c`. The check is server-side on purpose:
+the client's `currentUser` is a snapshot from login, and 1C may link the counterparty while the cart is
+open. `GET auth/me/` (JWT) returns the same `user` payload as login so the client can refresh that
+snapshot without re-authenticating; the Flutter cart calls it on open and before checkout.
 
 ### Product images
 `items/` still accepts `images` as a list of path strings, and now also as objects

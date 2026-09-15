@@ -50,14 +50,16 @@ class FrontendCartViewSet(BaseFrontendViewSet):
 
     def create(self, request, *args, **kwargs):
         """
-        POST /api/v1/front/cart/ — Добавить товар или изменить его количество.
+        POST /api/v1/<org>/cart/ — Добавить товар или изменить количество ОДНОЙ строки.
         Принимает: {"item_id": "UUID", "quantity": 20, "package_id": "UUID" | null}
 
-        `quantity` — ВСЕГДА в базовых единицах товара, даже если клиент набирал коробками:
-        цена в прайсе за базовую единицу, поэтому пересчёт делает фронт (он знает множитель
-        упаковки из выдачи каталога), а бэкенд хранит одну однозначную величину.
-        `package_id` — необязателен, запоминаем его только чтобы показать количество обратно
-        в той же упаковке и перенести её в заказ.
+        Строка определяется парой «товар + единица»: один и тот же товар можно положить
+        и коробками, и штуками — это две разные строки, и запрос меняет только ту,
+        чья единица передана. `package_id` не передан или null — строка базовой единицы.
+
+        `quantity` — ВСЕГДА в базовых единицах товара, даже для строки коробками:
+        цена в прайсе за базовую единицу. Пересчёт делает фронт, он знает множитель
+        упаковки из выдачи каталога. 0 или меньше — удалить эту строку.
         """
         item_id = request.data.get('item_id')
         quantity = request.data.get('quantity')
@@ -73,37 +75,43 @@ class FrontendCartViewSet(BaseFrontendViewSet):
             return Response({"ok": False, "message": "Количество должно быть числом"},
                             status=status.HTTP_400_BAD_REQUEST)
 
-        if quantity <= 0:
-            # Если Flutter прислал 0 или меньше — расцениваем как удаление позиции
-            CartItem.objects.filter(
-                user=request.user,
-                item_id=item_id,
-                organization=self.current_organization,
-            ).delete()
-            return Response({"ok": True, "message": "Товар удален из корзины"}, status=status.HTTP_200_OK)
-
         if not Item.objects.filter(id=item_id, organization=self.current_organization).exists():
             return Response({"ok": False, "message": "Указанный товар не найден в этом филиале"},
                             status=status.HTTP_404_NOT_FOUND)
 
-        # Упаковка должна принадлежать этому же товару — иначе игнорируем и считаем,
-        # что позиция набрана базовыми единицами.
+        # Чужую или несуществующую упаковку отклоняем, а не подменяем базовой единицей:
+        # теперь это разные строки, и молчаливая подмена влила бы коробки в строку штук.
         if package_id and not ItemPackage.objects.filter(id=package_id, item_id=item_id).exists():
-            package_id = None
+            return Response({"ok": False, "message": "Упаковка не относится к этому товару"},
+                            status=status.HTTP_400_BAD_REQUEST)
 
-        # Создаем запись или перезаписываем количество (благодаря unique_together)
+        line = CartItem.objects.filter(
+            user=request.user,
+            item_id=item_id,
+            organization=self.current_organization,
+            package_id=package_id,
+        )
+
+        if quantity <= 0:
+            line.delete()
+            return Response({"ok": True, "message": "Товар удален из корзины"}, status=status.HTTP_200_OK)
+
+        # update_or_create по полному ключу строки. package_id=None здесь превращается
+        # в IS NULL, поэтому строка базовой единицы находится так же, как и упаковочная.
         cart_item, created = CartItem.objects.update_or_create(
             user=request.user,
             item_id=item_id,
             organization=self.current_organization,
-            defaults={'quantity': quantity, 'package_id': package_id}
+            package_id=package_id,
+            defaults={'quantity': quantity},
         )
 
         msg = "Товар добавлен в корзину" if created else "Количество товара обновлено"
         return Response({"ok": True, "message": msg}, status=status.HTTP_200_OK)
 
     def destroy(self, request, pk=None, *args, **kwargs):
-        """DELETE /api/v1/front/cart/{item_id}/ — Полностью удалить товар из корзины"""
+        """DELETE /api/v1/<org>/cart/{item_id}/ — удалить товар из корзины во ВСЕХ единицах.
+        Одну строку удаляют через POST cart/ с quantity=0 и её package_id."""
         deleted, _ = CartItem.objects.filter(
             user=request.user,
             item_id=pk,

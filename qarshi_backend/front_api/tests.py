@@ -356,7 +356,7 @@ class ItemPackageFlowTests(TestCase):
         self.assertEqual(position["price"], 12.0)
         self.assertEqual(position["total"], 360.0)
 
-    def test_foreign_package_is_ignored(self):
+    def test_foreign_package_is_rejected(self):
         other_item = Item.objects.create(id=uuid.uuid4(), item_type=self.item_type,
                                          name="Другой", unit="шт", organization=self.org)
         foreign_guid = uuid.uuid4()
@@ -364,11 +364,89 @@ class ItemPackageFlowTests(TestCase):
             id=item_package_pk(other_item.id, foreign_guid), guid_1c=foreign_guid,
             item=other_item, name="Блок", quantity=Decimal("5"))
 
-        self.client.post(self.api("cart/"), {
+        response = self.client.post(self.api("cart/"), {
             "item_id": str(self.item.id), "quantity": 5, "package_id": str(foreign.id),
         }, content_type="application/json", **self.auth)
 
-        self.assertIsNone(CartItem.objects.get(item=self.item).package_id)
+        # Подмена на базовую единицу влила бы чужие блоки в строку литров.
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(CartItem.objects.exists())
+
+    def put_line(self, quantity, package=None):
+        return self.client.post(self.api("cart/"), {
+            "item_id": str(self.item.id), "quantity": quantity,
+            "package_id": str(package.id) if package else None,
+        }, content_type="application/json", **self.auth)
+
+    def test_same_product_in_two_units_is_two_lines(self):
+        # 5 коробок по 10 л и отдельно 3 л.
+        self.assertEqual(self.put_line(50, self.box).status_code, 200)
+        self.assertEqual(self.put_line(3).status_code, 200)
+
+        lines = self.client.get(self.api("cart/"), **self.auth).json()["results"]
+        by_unit = {line["package_id"]: line for line in lines}
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(by_unit[str(self.box.id)]["quantity"], 50.0)
+        self.assertEqual(by_unit[str(self.box.id)]["package"],
+                         {"id": str(self.box.id), "name": "Коробка", "quantity": 10.0})
+        self.assertEqual(by_unit[None]["quantity"], 3.0)
+        self.assertIsNone(by_unit[None]["package"])
+
+    def test_changing_one_line_leaves_the_other(self):
+        self.put_line(50, self.box)
+        self.put_line(3)
+
+        self.put_line(7)  # меняем только штучную строку
+        self.assertEqual(CartItem.objects.get(package=self.box).quantity, Decimal("50"))
+        self.assertEqual(CartItem.objects.get(package__isnull=True).quantity, Decimal("7"))
+
+        self.put_line(0, self.box)  # удаляем только коробки
+        self.assertEqual(list(CartItem.objects.values_list('package_id', flat=True)), [None])
+
+    def test_order_keeps_one_row_per_unit(self):
+        self.put_line(50, self.box)
+        self.put_line(3)
+
+        response = self.client.post(self.api("orders/"), {}, content_type="application/json",
+                                    **self.auth)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["created_at"])
+
+        rows = {row.package_name: row for row in OrderItem.objects.all()}
+        self.assertEqual(set(rows), {"Коробка", ""})
+        self.assertEqual(rows["Коробка"].package_count, Decimal("5.000"))
+        self.assertEqual(rows[""].quantity, Decimal("3.00"))
+        self.assertEqual(response.json()["result"]["total_amount"], "636.00")  # (50 + 3) * 12
+
+    def test_unregistered_user_is_refused_then_allowed_after_linking(self):
+        """Сценарий из жизни: заказ отклонён, 1С привязала контрагента, повтор без перезахода."""
+        profile = UserProfile.objects.get(user=self.user)
+        profile.guid_partner1c = ""
+        profile.save(update_fields=["guid_partner1c"])
+        self.put_line(3)
+
+        refused = self.client.post(self.api("orders/"), {}, content_type="application/json",
+                                   **self.auth)
+        self.assertEqual(refused.status_code, 403)
+        self.assertEqual(refused.json()["code"], "unregistered")
+        self.assertTrue(CartItem.objects.exists())  # корзина не тронута
+
+        me = self.client.get(self.api("auth/me/"), **self.auth).json()
+        self.assertIsNone(me["user"]["profile"]["guid_partner1c"])
+
+        # 1С привязала профиль — токен тот же, заново входить не нужно.
+        profile.guid_partner1c = "p-777"
+        profile.save(update_fields=["guid_partner1c"])
+
+        me = self.client.get(self.api("auth/me/"), **self.auth).json()
+        self.assertEqual(me["user"]["profile"]["guid_partner1c"], "p-777")
+
+        accepted = self.client.post(self.api("orders/"), {}, content_type="application/json",
+                                    **self.auth)
+        self.assertEqual(accepted.status_code, 200)
+
+    def test_auth_me_requires_token(self):
+        self.assertEqual(self.client.get(self.api("auth/me/")).status_code, 401)
 
     def test_order_stores_package_snapshot(self):
         self.client.post(self.api("cart/"), {
@@ -470,6 +548,27 @@ class Sync1cPackagesAndImagesTests(TestCase):
         }
         self.assertEqual(self.post("items/", [row]).status_code, 200)
         self.assertEqual(ItemPackage.objects.count(), 1)
+
+    def test_removed_package_merges_cart_line_into_base_unit(self):
+        client_user = User.objects.create_user(username="buyer", password="x")
+        guid = uuid.uuid4()
+        box = ItemPackage.objects.create(id=item_package_pk(self.item.id, guid), guid_1c=guid,
+                                         item=self.item, name="Коробка", quantity=Decimal("10"))
+        CartItem.objects.create(user=client_user, item=self.item, organization=self.org,
+                                package=box, quantity=Decimal("20"))
+        CartItem.objects.create(user=client_user, item=self.item, organization=self.org,
+                                quantity=Decimal("3"))
+
+        row = {"id": str(self.item.id), "organization_id": str(self.org.id),
+               "item_type": str(self.item_type.id), "name": "Товар", "unit": "шт",
+               "packages": []}
+        # Без слияния SET_NULL дал бы две базовые строки и обмен упал бы на уникальности.
+        self.assertEqual(self.post("items/", [row]).status_code, 200)
+
+        self.assertFalse(ItemPackage.objects.exists())
+        line = CartItem.objects.get(user=client_user)
+        self.assertIsNone(line.package_id)
+        self.assertEqual(line.quantity, Decimal("23"))
 
     def test_packages_untouched_when_key_absent(self):
         guid = uuid.uuid4()

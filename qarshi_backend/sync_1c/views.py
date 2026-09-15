@@ -18,7 +18,7 @@ import base64
 from decimal import Decimal, InvalidOperation
 from django.core.files.base import ContentFile
 
-from front_api.models import TelegramAccount
+from front_api.models import CartItem, TelegramAccount
 from front_api.cache import bump_catalog_version
 
 # from django.utils.dateparse import parse_datetime
@@ -217,6 +217,33 @@ def build_item_packages(item_id, raw_packages):
     return list(packages.values())
 
 
+
+def release_cart_lines(package_ids):
+    """Переводит строки корзины с удаляемых упаковок на базовую единицу.
+
+    Корзина хранит по строке на пару «товар + единица», и строка базовой единицы у
+    товара может уже существовать. Если просто дать сработать SET_NULL, получатся две
+    базовые строки и ограничение уникальности уронит всю синхронизацию. Поэтому
+    количество сливаем в существующую базовую строку, а если её нет — переводим строку
+    на базовую единицу. Количество уже в базовых единицах, пересчитывать не нужно.
+    """
+    lines = list(CartItem.objects.filter(package_id__in=package_ids))
+    for line in lines:
+        base = CartItem.objects.filter(
+            user_id=line.user_id,
+            item_id=line.item_id,
+            organization_id=line.organization_id,
+            package__isnull=True,
+        ).first()
+        if base:
+            base.quantity += line.quantity
+            base.save(update_fields=['quantity', 'updated_at'])
+            line.delete()
+        else:
+            line.package = None
+            line.save(update_fields=['package', 'updated_at'])
+
+
 class Sync1cUpdateItemsView(Base1cAPIView):
 
     def post(self, request):
@@ -320,8 +347,12 @@ class Sync1cUpdateItemsView(Base1cAPIView):
                     # поэтому история не пострадает.
                     if item_ids_with_packages:
                         kept_ids = {p.id for p in packages_to_upsert}
-                        ItemPackage.objects.filter(item_id__in=item_ids_with_packages) \
-                            .exclude(id__in=kept_ids).delete()
+                        stale = ItemPackage.objects.filter(item_id__in=item_ids_with_packages) \
+                            .exclude(id__in=kept_ids)
+                        stale_ids = list(stale.values_list('id', flat=True))
+                        if stale_ids:
+                            release_cart_lines(stale_ids)
+                            ItemPackage.objects.filter(id__in=stale_ids).delete()
                         if packages_to_upsert:
                             ItemPackage.objects.bulk_create(
                                 packages_to_upsert, update_conflicts=True,

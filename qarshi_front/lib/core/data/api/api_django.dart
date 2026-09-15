@@ -255,22 +255,12 @@ class DjangoApi {
     }
   }
 
-  // Возвращает ID товара и его количество в корзине: {'product_id': quantity}.
-  // Заодно поднимает в глобальное состояние выбранные упаковки, чтобы каталог
-  // показывал количество в той же единице, в которой клиент его набирал.
+  // Количества корзины по строкам: cartLineKey(товар, единица) -> базовые единицы.
+  // Один товар коробками и штуками — две записи.
   Future<Map<String, num>> getCartQuantities() async {
     try {
       final cartItems = await getCart(); // Используем метод из предыдущего шага
-      final Map<String, num> quantities = {};
-      final Map<String, String> packages = {};
-      for (var item in cartItems) {
-        quantities[item.product.id] = item.quantity;
-        if (item.packageId != null && item.packageId!.isNotEmpty) {
-          packages[item.product.id] = item.packageId!;
-        }
-      }
-      cartPackageNotifier.value = packages;
-      return quantities;
+      return {for (final item in cartItems) item.lineKey: item.quantity};
     } catch (e) {
       return {};
     }
@@ -292,31 +282,64 @@ class DjangoApi {
     }
   }
 
-  /// Возвращает (orderNumber, error): при успехе orderNumber != null, error == null;
-  /// при ошибке orderNumber == null, error — текст причины с бэкенда.
-  Future<(String?, String?)> createOrder() async {
+  /// Оформляет заказ из корзины. Никогда не бросает исключение: и успех, и любая
+  /// ошибка возвращаются в [OrderSubmitResult], чтобы экран всегда мог показать итог.
+  Future<OrderSubmitResult> createOrder() async {
     try {
       final response = await _dio.post(
         'orders/',
         options: Options(headers: {'Authorization': 'Bearer $tokenAccess'}),
       );
-      if (response.statusCode == 200 && response.data != null) {
-        final number =
-            response.data['order_number'] ??
-            response.data['number'] ??
-            'Успешно';
-        return (number.toString(), null);
+      final data = response.data;
+      if (response.statusCode == 200 && data is Map && data['ok'] == true) {
+        return OrderSubmitResult.success(
+          orderNumber: (data['order_number'] ?? '').toString(),
+          createdAt: (data['created_at'] ?? '').toString(),
+        );
       }
-      return (null, 'Непредвиденный ответ сервера (${response.statusCode}).');
+      return OrderSubmitResult.failure(
+        'Непредвиденный ответ сервера (${response.statusCode}).',
+      );
     } on DioException catch (e) {
       final data = e.response?.data;
       if (data is Map && data['message'] != null) {
         // Реальная причина с бэкенда (напр. «Товар X не имеет цены…»)
-        return (null, data['message'].toString());
+        return OrderSubmitResult.failure(
+          data['message'].toString(),
+          code: data['code']?.toString(),
+        );
       }
-      return (null, 'Ошибка сети: ${e.message}');
+      return OrderSubmitResult.failure(
+        'Не удалось связаться с сервером. Проверьте интернет и откройте '
+        '«Мои заказы», прежде чем отправлять повторно.',
+      );
     } catch (e) {
-      return (null, 'Ошибка оформления: $e');
+      return OrderSubmitResult.failure('Ошибка оформления: $e');
+    }
+  }
+
+  /// Перечитывает профиль вошедшего пользователя с сервера и обновляет [currentUser].
+  ///
+  /// Профиль в памяти — снимок на момент входа. Если 1С привязала контрагента,
+  /// пока приложение открыто, без этого вызова экран так и считал бы клиента
+  /// незарегистрированным до перезагрузки. Возвращает true, если данные обновлены.
+  Future<bool> refreshCurrentUser() async {
+    try {
+      final response = await _dio.get(
+        'auth/me/',
+        options: Options(headers: {'Authorization': 'Bearer $tokenAccess'}),
+      );
+      final data = response.data;
+      if (response.statusCode == 200 && data is Map && data['user'] is Map) {
+        currentUser = UserModel.fromJson(
+          Map<String, dynamic>.from(data['user'] as Map),
+        );
+        return true;
+      }
+      return false;
+    } catch (e) {
+      // Нет сети — оставляем прежний профиль, сервер всё равно проверит привязку сам.
+      return false;
     }
   }
 

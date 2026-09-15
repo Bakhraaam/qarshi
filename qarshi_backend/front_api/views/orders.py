@@ -72,6 +72,24 @@ class FrontendOrderViewSet(mixins.CreateModelMixin,
         """Оформление заказа: перенос товаров из корзины текущего субдомена в новый заказ"""
         user = request.user
 
+        # Привязку к контрагенту проверяем здесь, по базе, а не только во Flutter.
+        # Клиент держит профиль с момента входа, и если 1С привяжет контрагента, пока
+        # открыта корзина, решать должно свежее состояние, а не снимок при логине.
+        profile = UserProfile.objects.filter(user=user, organization=self.current_organization).first()
+        if not profile or not (profile.guid_partner1c or '').strip():
+            notice = (self.current_organization.unregistered_notice or '').strip()
+            return Response(
+                {
+                    "ok": False,
+                    # Машинный код: по нему фронт показывает окно «не зарегистрирован»,
+                    # а не общий текст ошибки.
+                    "code": "unregistered",
+                    "message": notice or "Ваш аккаунт ещё не подтверждён. Оформление заказа "
+                                         "станет доступно после регистрации у менеджера.",
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         # 1. Достаем товары из корзины текущего филиала (+ prefetch цен против N+1)
         cart_items = CartItem.objects.filter(
             user=user,
@@ -162,5 +180,6 @@ class FrontendOrderViewSet(mixins.CreateModelMixin,
             "ok": True,
             "message": "Заказ успешно оформлен",
             "order_number": order.order_number if hasattr(order, 'order_number') else order.id,
+            "created_at": return_serializer.data.get('created_at'),
             "result": return_serializer.data
         }, status=status.HTTP_200_OK)

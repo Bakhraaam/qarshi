@@ -188,6 +188,11 @@ class ProductCategory {
   }
 }
 
+/// Ключ строки корзины: товар + единица. Базовая единица кодируется пустой строкой,
+/// поэтому «5 коробок» и «3 шт» одного товара — две разные строки.
+String cartLineKey(String productId, String? packageId) =>
+    '$productId|${packageId ?? ''}';
+
 /// Упаковка товара: блок, коробка, канистра.
 ///
 /// Цена в каталоге ВСЕГДА за базовую единицу (`Product.unit`), а упаковка — только
@@ -262,6 +267,13 @@ class Product {
     return null;
   }
 
+  /// Цена за выбранную единицу. В прайсе цена всегда за базовую единицу,
+  /// а за коробку она умножается на вместимость коробки.
+  num priceFor(ItemPackage? package) => price * (package?.quantity ?? 1);
+
+  /// Подпись единицы: название упаковки или базовая единица товара.
+  String unitLabelFor(ItemPackage? package) => package?.name ?? unit;
+
   /// Какую единицу подставить, когда клиент ещё ничего не выбирал.
   ItemPackage? get defaultPackage {
     for (final package in packages) {
@@ -321,37 +333,48 @@ class CartItem {
   num quantity;
   num total;
 
-  /// Упаковка, которой позиция набрана (null — базовая единица).
-  final String? packageId;
+  /// Единица, в которой набрана ЭТА строка (null — базовая единица).
+  /// Один товар может лежать в корзине несколькими строками: коробками и штуками.
+  /// Упаковку берём из самой строки, а не из product.packages: там нет
+  /// недействительных упаковок, а строка с такой упаковкой всё ещё в корзине.
+  final ItemPackage? package;
 
   CartItem({
     required this.product,
     required this.quantity,
     required this.total,
-    this.packageId,
+    this.package,
   });
+
+  String? get packageId => package?.id;
+
+  /// Ключ строки в глобальном состоянии корзины.
+  String get lineKey => cartLineKey(product.id, packageId);
 
   // Рассчитываем стоимость этой позиции локально
   num get totalWithItem => product.price * quantity;
 
-  /// Упаковка позиции (null — набрана базовой единицей).
-  ItemPackage? get package => product.packageById(packageId);
-
   /// Шаг счётчика в базовых единицах: 1 шт или целая коробка.
   num get step => package?.quantity ?? 1;
 
-  /// Количество в выбранной единице: 20 шт при коробке по 10 — это 2 коробки.
+  /// Количество в единице строки: 50 шт при коробке по 10 — это 5 коробок.
   num get displayQuantity => quantity / step;
 
   /// Подпись единицы рядом со счётчиком.
   String get unitLabel => package?.name ?? product.unit;
 
+  /// Цена за единицу строки: за коробку — цена базовой единицы, умноженная на вместимость.
+  num get unitPrice => product.price * step;
+
   factory CartItem.fromJson(Map<String, dynamic> json) {
+    final rawPackage = json['package'];
     return CartItem(
       product: Product.fromJson(json['product']),
-      quantity: num.parse(json['quantity'].toString()) ?? 1,
-      total: num.parse(json['total'].toString()) ?? 0,
-      packageId: json['package_id']?.toString(),
+      quantity: num.tryParse(json['quantity'].toString()) ?? 1,
+      total: num.tryParse(json['total'].toString()) ?? 0,
+      package: rawPackage is Map<String, dynamic>
+          ? ItemPackage.fromJson(rawPackage)
+          : null,
     );
   }
 
@@ -491,4 +514,36 @@ class OrderModel {
         .map((json) => OrderModel.fromJson(json as Map<String, dynamic>))
         .toList();
   }
+}
+
+/// Итог отправки заказа: либо номер и время, либо текст ошибки.
+class OrderSubmitResult {
+  final String? orderNumber;
+
+  /// Время оформления в ISO-формате, как его вернул сервер.
+  final String createdAt;
+  final String? error;
+
+  /// Машинный код ошибки с бэкенда, например `unregistered`.
+  final String? code;
+
+  const OrderSubmitResult._({
+    this.orderNumber,
+    this.createdAt = '',
+    this.error,
+    this.code,
+  });
+
+  const OrderSubmitResult.success({
+    required String orderNumber,
+    String createdAt = '',
+  }) : this._(orderNumber: orderNumber, createdAt: createdAt);
+
+  const OrderSubmitResult.failure(String error, {String? code})
+    : this._(error: error, code: code);
+
+  bool get isSuccess => orderNumber != null;
+
+  /// Клиент не привязан к контрагенту в 1С — показываем отдельное окно.
+  bool get isUnregistered => code == 'unregistered';
 }

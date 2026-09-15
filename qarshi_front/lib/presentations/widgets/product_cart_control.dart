@@ -9,24 +9,27 @@ import 'package:qarshi/core/utils/formatters.dart';
 /// поэтому логика ввода количества живёт здесь, а не в конкретном экране.
 ///
 /// Если у товара есть упаковки (блок, коробка), над счётчиком появляется выбор
-/// единицы. Наружу количество ВСЕГДА уходит в базовых единицах товара: цена в
-/// прайсе за базовую единицу, и бэкенд хранит корзину так же. Упаковка меняет
-/// только шаг счётчика и подпись.
+/// единицы. Каждая единица — отдельная строка корзины: переключив «Коробка» на
+/// «шт», клиент видит количество строки штук или кнопку «В корзину», если штуками
+/// товар ещё не брали. Выбранную единицу хранит родитель ([package]), потому что
+/// от неё зависит и цена в карточке.
+///
+/// Наружу количество ВСЕГДА уходит в базовых единицах товара: цена в прайсе за
+/// базовую единицу, и бэкенд хранит корзину так же.
 class ProductCartControl extends StatefulWidget {
   final Product product;
 
-  /// Количество в базовых единицах товара.
+  /// Выбранная единица (null — базовая).
+  final ItemPackage? package;
+
+  /// Количество строки выбранной единицы в базовых единицах (0 — строки нет).
   final num quantity;
 
-  /// Новое количество — тоже в базовых единицах.
+  /// Новое количество строки выбранной единицы — тоже в базовых единицах.
   final ValueChanged<num> onQuantityChanged;
 
-  /// Выбранная упаковка (null — базовая единица).
-  final String? packageId;
-
-  /// Клиент переключил единицу. Приходит новый id упаковки и пересчитанное
-  /// количество в базовых единицах.
-  final void Function(String? packageId, num quantity)? onPackageChanged;
+  /// Клиент переключил единицу. Корзину это не меняет.
+  final ValueChanged<ItemPackage?>? onPackageChanged;
 
   /// Компактный размер для сетки каталога; false — крупный для экрана товара.
   final bool dense;
@@ -36,7 +39,7 @@ class ProductCartControl extends StatefulWidget {
     required this.product,
     required this.quantity,
     required this.onQuantityChanged,
-    this.packageId,
+    this.package,
     this.onPackageChanged,
     this.dense = true,
   });
@@ -51,26 +54,17 @@ class _ProductCartControlState extends State<ProductCartControl> {
 
   bool _isEditingQuantity = false;
 
-  /// Упаковка, выбранная клиентом. Пока родитель не хранит выбор сам
-  /// (экран товара), держим его здесь.
-  String? _packageId;
-
-  ItemPackage? get _package => widget.product.packageById(_packageId);
-
   /// Сколько базовых единиц в одном шаге счётчика.
-  num get _step => _package?.quantity ?? 1;
+  num get _step => widget.package?.quantity ?? 1;
 
-  /// Количество в выбранной единице: 20 шт при коробке по 10 — это 2 коробки.
+  /// Количество в выбранной единице: 50 шт при коробке по 10 — это 5 коробок.
   num get _displayQuantity => widget.quantity / _step;
 
-  String get _unitLabel => _package?.name ?? widget.product.unit;
+  String get _unitLabel => widget.product.unitLabelFor(widget.package);
 
   @override
   void initState() {
     super.initState();
-
-    // Выбор из корзины важнее: он говорит, чем клиент уже набирал эту позицию.
-    _packageId = widget.packageId ?? widget.product.defaultPackage?.id;
 
     _quantityController = TextEditingController(
       text: formatNumber(_displayQuantity),
@@ -84,11 +78,12 @@ class _ProductCartControlState extends State<ProductCartControl> {
   void didUpdateWidget(covariant ProductCartControl oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    if (widget.packageId != oldWidget.packageId && widget.packageId != null) {
-      _packageId = widget.packageId;
+    final unitChanged = oldWidget.package?.id != widget.package?.id;
+    if (unitChanged && _quantityFocusNode.hasFocus) {
+      // Сменили единицу посреди ввода — недописанное число к новой строке не относится.
+      _quantityFocusNode.unfocus();
     }
-
-    if (!_quantityFocusNode.hasFocus && oldWidget.quantity != widget.quantity) {
+    if (unitChanged || oldWidget.quantity != widget.quantity) {
       _quantityController.text = formatNumber(_displayQuantity);
     }
   }
@@ -154,28 +149,6 @@ class _ProductCartControlState extends State<ProductCartControl> {
   void _changeBy(int steps) {
     final next = _normalize(widget.quantity + _step * steps);
     widget.onQuantityChanged(next < 0 ? 0 : next);
-  }
-
-  void _selectPackage(String? packageId) {
-    if (packageId == _packageId) return;
-
-    final package = widget.product.packageById(packageId);
-    final ratio = package?.quantity ?? 1;
-
-    // Дробные упаковки не показываем: набранное количество округляем ВВЕРХ до
-    // целого числа новых единиц, иначе после переключения появлялось «0.5 коробки».
-    num quantity = widget.quantity;
-    if (quantity > 0) {
-      quantity = _normalize((quantity / ratio).ceil() * ratio);
-    }
-
-    setState(() => _packageId = packageId);
-
-    if (widget.onPackageChanged != null) {
-      widget.onPackageChanged!(packageId, quantity);
-    } else if (quantity != widget.quantity) {
-      widget.onQuantityChanged(quantity);
-    }
   }
 
   @override
@@ -292,9 +265,9 @@ class _ProductCartControlState extends State<ProductCartControl> {
       children: [
         PackageSelector(
           product: widget.product,
-          packageId: _packageId,
+          package: widget.package,
           dense: widget.dense,
-          onChanged: _selectPackage,
+          onChanged: (package) => widget.onPackageChanged?.call(package),
         ),
         SizedBox(height: widget.dense ? 6 : 10),
         counter,
@@ -305,18 +278,18 @@ class _ProductCartControlState extends State<ProductCartControl> {
 
 /// Выбор единицы товара: базовая (шт, л) и упаковки из 1С (блок, коробка).
 ///
-/// Цена не зависит от выбора — она всегда за базовую единицу. Выбор влияет
-/// только на то, чем клиент набирает количество.
+/// Выбор меняет цену в карточке (за коробку она больше) и строку корзины, которую
+/// показывает счётчик. В прайсе цена по-прежнему за базовую единицу.
 class PackageSelector extends StatelessWidget {
   final Product product;
-  final String? packageId;
-  final ValueChanged<String?> onChanged;
+  final ItemPackage? package;
+  final ValueChanged<ItemPackage?> onChanged;
   final bool dense;
 
   const PackageSelector({
     super.key,
     required this.product,
-    required this.packageId,
+    required this.package,
     required this.onChanged,
     this.dense = true,
   });
@@ -332,7 +305,9 @@ class PackageSelector extends StatelessWidget {
   Widget build(BuildContext context) {
     if (product.packages.isEmpty) return const SizedBox.shrink();
 
-    final selected = product.packageById(packageId);
+    // Значение списка — id упаковки; '' — базовая единица. null в DropdownButton
+    // означал бы «ничего не выбрано», а базовая единица — полноценный вариант.
+    final value = package == null ? '' : package!.id;
 
     return Container(
       height: dense ? 28 : 40,
@@ -342,8 +317,8 @@ class PackageSelector extends StatelessWidget {
         border: Border.all(color: const Color(0xFFE2E8F0)),
       ),
       child: DropdownButtonHideUnderline(
-        child: DropdownButton<String?>(
-          value: selected?.id,
+        child: DropdownButton<String>(
+          value: value,
           isExpanded: true,
           isDense: true,
           borderRadius: BorderRadius.circular(8),
@@ -358,29 +333,76 @@ class PackageSelector extends StatelessWidget {
             fontWeight: FontWeight.w600,
             color: const Color(0xFF0F172A),
           ),
-          // Фон делаем отдельно: DropdownButton сам по себе прозрачный.
           dropdownColor: Colors.white,
           items: [
-            DropdownMenuItem<String?>(
-              value: null,
+            DropdownMenuItem<String>(
+              value: '',
               child: Text(
                 label(product, null),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            for (final package in product.packages)
-              DropdownMenuItem<String?>(
-                value: package.id,
+            for (final item in product.packages)
+              DropdownMenuItem<String>(
+                value: item.id,
                 child: Text(
-                  label(product, package),
+                  label(product, item),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
           ],
-          onChanged: onChanged,
+          onChanged: (id) {
+            if (id == null) return;
+            onChanged(id.isEmpty ? null : product.packageById(id));
+          },
         ),
+      ),
+    );
+  }
+}
+
+/// Цена за выбранную единицу с подписью единицы: «120 USD / Коробка».
+///
+/// Одна строка на карточку каталога и экран товара, чтобы цена везде считалась
+/// одинаково: цена базовой единицы из прайса, умноженная на вместимость упаковки.
+class UnitPriceText extends StatelessWidget {
+  final Product product;
+  final ItemPackage? package;
+  final double fontSize;
+
+  const UnitPriceText({
+    super.key,
+    required this.product,
+    required this.package,
+    required this.fontSize,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final unit = product.unitLabelFor(package);
+    return Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(text: formatPrice(product.priceFor(package))),
+          if (unit.isNotEmpty)
+            TextSpan(
+              text: ' / $unit',
+              style: TextStyle(
+                fontSize: fontSize * 0.62,
+                fontWeight: FontWeight.w600,
+                color: const Color(0xFF64748B),
+              ),
+            ),
+        ],
+      ),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        fontSize: fontSize,
+        fontWeight: FontWeight.w800,
+        color: const Color(0xFF0F172A),
       ),
     );
   }

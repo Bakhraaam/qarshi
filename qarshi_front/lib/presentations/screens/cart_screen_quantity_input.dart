@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -13,10 +15,18 @@ class CartScreen extends StatefulWidget {
   State<CartScreen> createState() => _CartScreenState();
 }
 
+/// Сколько живёт кнопка «Отменить» после удаления строки корзины.
+const Duration _undoRemovalWindow = Duration(seconds: 3);
+
 class _CartScreenState extends State<CartScreen> {
   final DjangoApi _api = DjangoApi();
 
   List<CartItem> _cartItems = [];
+
+  /// Строки, удалённые клиентом, но ещё не удалённые на сервере. Пока идёт таймер,
+  /// строка остаётся на своём месте в списке в виде плашки «Удалено · Отменить»,
+  /// а в суммы и в заказ уже не входит. Запрос на сервер уходит по истечении таймера.
+  final Map<CartItem, Timer> _pendingRemovals = {};
   bool _isLoading = true;
   bool _isCheckingOut = false;
   DateTime? _deliveryDate;
@@ -26,8 +36,69 @@ class _CartScreenState extends State<CartScreen> {
 
   @override
   void dispose() {
+    // Ушли с экрана раньше, чем истёк таймер: удаление подтверждено, отправляем сразу.
+    for (final item in _pendingRemovals.keys.toList()) {
+      _commitRemoval(item);
+    }
     _commentController.dispose();
     super.dispose();
+  }
+
+  /// Строки, которые реально лежат в корзине: без тех, что ждут отмены удаления.
+  List<CartItem> get _activeItems =>
+      _cartItems.where((item) => !_pendingRemovals.containsKey(item)).toList();
+
+  /// Убрать строку с возможностью отмены в течение [_undoRemovalWindow].
+  void _scheduleRemoval(CartItem item) {
+    if (_pendingRemovals.containsKey(item)) return;
+    setState(() {
+      _pendingRemovals[item] = Timer(
+        _undoRemovalWindow,
+        () => _commitRemoval(item),
+      );
+    });
+  }
+
+  void _undoRemoval(CartItem item) {
+    final timer = _pendingRemovals.remove(item);
+    if (timer == null) return;
+    timer.cancel();
+    setState(() {});
+  }
+
+  /// Удаляет строку на сервере. Вызывается по таймеру, при уходе с экрана и перед
+  /// оформлением заказа — иначе ещё не удалённая на сервере строка попала бы в заказ.
+  Future<void> _commitRemoval(CartItem item) async {
+    final timer = _pendingRemovals.remove(item);
+    if (timer == null) return;
+    timer.cancel();
+
+    final success = await _api.updateCartItem(
+      item.product.id,
+      0,
+      packageId: item.packageId,
+    );
+
+    if (success) {
+      setCartQuantityLocal(item.product.id, item.packageId, 0);
+      if (mounted) setState(() => _cartItems.remove(item));
+      return;
+    }
+
+    // Сервер не удалил — строка остаётся в корзине, показываем её снова.
+    if (!mounted) return;
+    setState(() {});
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Не удалось удалить «${item.product.name}»'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  /// Подтверждает все отложенные удаления и ждёт ответа сервера.
+  Future<void> _commitAllRemovals() async {
+    await Future.wait(_pendingRemovals.keys.toList().map(_commitRemoval));
   }
 
   @override
@@ -42,7 +113,13 @@ class _CartScreenState extends State<CartScreen> {
     setState(() => _isLoading = true);
 
     try {
-      final items = await _api.getCart();
+      // Профиль перечитываем вместе с корзиной: если 1С привязала контрагента,
+      // пока приложение было открыто, экран корзины уже узнает об этом.
+      final results = await Future.wait<Object>([
+        _api.getCart(),
+        _api.refreshCurrentUser(),
+      ]);
+      final items = results[0] as List<CartItem>;
 
       if (!mounted) return;
 
@@ -52,13 +129,7 @@ class _CartScreenState extends State<CartScreen> {
       });
 
       // Синхронизируем глобальную корзину (бейдж/каталог) с сервером.
-      cartNotifier.value = {for (final it in items) it.product.id: it.quantity};
-      // И выбранные единицы набора — чтобы каталог показывал коробки коробками.
-      cartPackageNotifier.value = {
-        for (final it in items)
-          if (it.packageId != null && it.packageId!.isNotEmpty)
-            it.product.id: it.packageId!,
-      };
+      cartNotifier.value = {for (final it in items) it.lineKey: it.quantity};
     } catch (e) {
       debugPrint('Ошибка загрузки корзины: $e');
 
@@ -84,15 +155,15 @@ class _CartScreenState extends State<CartScreen> {
     newQuantity = _normalizeQuantity(newQuantity);
     if (newQuantity < 0) return;
 
+    // До нуля — корзиной, «−» или вводом 0 — это удаление, и его можно отменить.
+    if (newQuantity == 0) {
+      _scheduleRemoval(item);
+      return;
+    }
+
     final previousQuantity = item.quantity;
 
-    setState(() {
-      if (newQuantity == 0) {
-        _cartItems.remove(item);
-      } else {
-        item.quantity = newQuantity;
-      }
-    });
+    setState(() => item.quantity = newQuantity);
 
     final success = await _api.updateCartItem(
       item.product.id,
@@ -101,12 +172,7 @@ class _CartScreenState extends State<CartScreen> {
     );
 
     if (!success && mounted) {
-      setState(() {
-        if (newQuantity == 0) {
-          _cartItems.add(item);
-        }
-        item.quantity = previousQuantity;
-      });
+      setState(() => item.quantity = previousQuantity);
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Не удалось изменить количество')),
@@ -115,55 +181,134 @@ class _CartScreenState extends State<CartScreen> {
     }
 
     // Успех — обновляем глобальную корзину, чтобы бейдж и каталог совпадали.
-    setCartQuantityLocal(item.product.id, newQuantity);
+    setCartQuantityLocal(item.product.id, item.packageId, newQuantity);
   }
 
-  Future<void> _handleCheckout() async {
-    if (_cartItems.isEmpty || _isCheckingOut) return;
-
-    // final isWide = MediaQuery.sizeOf(context).width >= 760;
-    // if (isWide && _deliveryDate == null) {
-    //   ScaffoldMessenger.of(
-    //     context,
-    //   ).showSnackBar(const SnackBar(content: Text('Выберите дату доставки')));
-    //   return;
-    // }
+  /// Отправляет заказ и ВСЕГДА показывает итог: успех, отказ или ошибку.
+  ///
+  /// Вызывается только когда все листы и подтверждения уже закрыты. Раньше лист
+  /// корзины закрывался командой pop уже после показа окна успеха, и pop закрывал
+  /// именно это окно — клиент не видел ни номера заказа, ни ошибки.
+  Future<void> _submitOrder() async {
+    if (_activeItems.isEmpty || _isCheckingOut) return;
 
     setState(() => _isCheckingOut = true);
+    _showSubmittingDialog();
 
-    final (orderNumber, error) = await _api.createOrder();
+    // Заказ собирается из серверной корзины, поэтому удалённые, но ещё не
+    // отправленные строки сначала действительно удаляем.
+    await _commitAllRemovals();
+    final result = await _api.createOrder();
 
     if (!mounted) return;
-
+    // Закрываем окно «Отправляем заказ…». Между его показом и этой строкой ничего
+    // не открывается, поэтому pop снимает именно его.
+    Navigator.of(context, rootNavigator: true).pop();
     setState(() => _isCheckingOut = false);
 
-    if (orderNumber != null) {
+    if (result.isSuccess) {
       setState(() => _cartItems.clear());
       // Заказ оформлен — корзина пуста и на всех экранах.
       cartNotifier.value = <String, num>{};
-      _showSuccessDialog(orderNumber);
+      await _showSuccessDialog(result);
       return;
     }
 
-    // Показываем реальную причину с бэкенда, а не общий текст.
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(error ?? 'Ошибка оформления заказа. Попробуйте позже.'),
-        backgroundColor: Colors.red,
-        duration: const Duration(seconds: 6),
+    if (result.isUnregistered) {
+      // Сервер проверил привязку по базе. Обновляем профиль, чтобы и экран знал.
+      await _api.refreshCurrentUser();
+      if (!mounted) return;
+      await _showUnregisteredDialog(message: result.error);
+      return;
+    }
+
+    await _showResultDialog(
+      icon: Icons.error_outline_rounded,
+      iconColor: const Color(0xFFDC2626),
+      iconBackground: const Color(0xFFFEE2E2),
+      title: 'Заказ не отправлен',
+      message: result.error ?? 'Ошибка оформления заказа. Попробуйте позже.',
+      primaryLabel: 'Понятно',
+      onPrimary: (dialogContext) => Navigator.of(dialogContext).pop(),
+    );
+  }
+
+  void _showSubmittingDialog() {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => PopScope(
+        canPop: false,
+        child: Dialog(
+          backgroundColor: Colors.white,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 60),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: 36,
+                  height: 36,
+                  child: CircularProgressIndicator(strokeWidth: 3),
+                ),
+                SizedBox(height: 18),
+                Text(
+                  'Отправляем заказ…',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Color(0xFF0F172A),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
 
-  Future<void> _showMobileCheckoutSheet() async {
-    // Незарегистрированным (нет guid_partner1c) — предупреждение вместо оформления.
+  /// Проверка привязки к контрагенту перед оформлением.
+  ///
+  /// Профиль сначала перечитывается с сервера: если 1С привязала аккаунт, пока
+  /// корзина была открыта, клиенту не нужно перезагружать страницу.
+  Future<bool> _ensureRegistered() async {
     if (!_isRegistered()) {
-      await _showUnregisteredDialog();
-      return;
+      setState(() => _isCheckingOut = true);
+      await _api.refreshCurrentUser();
+      if (!mounted) return false;
+      setState(() => _isCheckingOut = false);
     }
+    if (_isRegistered()) return true;
+    await _showUnregisteredDialog();
+    return false;
+  }
+
+  /// Оформление с широкого экрана: подтверждение и сразу отправка.
+  Future<void> _checkoutFromPanel() async {
+    if (_activeItems.isEmpty) return;
+    if (!await _ensureRegistered()) return;
+    if (!mounted) return;
+    if (await _confirmOrder(context)) {
+      await _submitOrder();
+    }
+  }
+
+  Future<void> _showMobileCheckoutSheet() async {
+    if (_activeItems.isEmpty) return;
+    // Незарегистрированным (нет guid_partner1c) — предупреждение вместо оформления.
+    if (!await _ensureRegistered()) return;
+    if (!mounted) return;
     FocusScope.of(context).unfocus();
 
-    await showModalBottomSheet<void>(
+    // Лист возвращает true, когда клиент подтвердил заказ. Отправляем уже ПОСЛЕ
+    // закрытия листа, чтобы окно с итогом ничем не перекрывалось и не закрывалось.
+    final confirmed = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
@@ -224,11 +369,9 @@ class _CartScreenState extends State<CartScreen> {
                                 setSheetState(() {});
                               },
                               onCheckout: () async {
-                                final success = await _confirmAndCheckout(
-                                  parentContext: sheetContext,
-                                );
-                                if (success && sheetContext.mounted) {
-                                  Navigator.of(sheetContext).pop();
+                                final ok = await _confirmOrder(sheetContext);
+                                if (ok && sheetContext.mounted) {
+                                  Navigator.of(sheetContext).pop(true);
                                 }
                               },
                               compact: true,
@@ -245,14 +388,21 @@ class _CartScreenState extends State<CartScreen> {
         );
       },
     );
+
+    if (confirmed == true && mounted) {
+      await _submitOrder();
+    }
   }
 
   // Зарегистрирован ли контрагент в 1С (есть guid_partner1c).
   bool _isRegistered() => currentUser?.userProfile.isRegistered ?? false;
 
-  Future<void> _showUnregisteredDialog() async {
+  Future<void> _showUnregisteredDialog({String? message}) async {
     final notice = (currentUser?.support.unregisteredNotice.trim() ?? '');
-    final text = notice.isNotEmpty
+    final serverText = message?.trim() ?? '';
+    final text = serverText.isNotEmpty
+        ? serverText
+        : notice.isNotEmpty
         ? notice
         : 'Ваш аккаунт ещё не подтверждён. Оформление заказа станет доступно после регистрации у менеджера.';
     await showDialog<void>(
@@ -325,15 +475,11 @@ class _CartScreenState extends State<CartScreen> {
     );
   }
 
-  Future<bool> _confirmAndCheckout({BuildContext? parentContext}) async {
-    // Незарегистрированным (нет guid_partner1c) оформление недоступно.
-    if (!_isRegistered()) {
-      await _showUnregisteredDialog();
-      return false;
-    }
+  /// Окно «Подтвердить заказ?». Только спрашивает, сам заказ не отправляет.
+  Future<bool> _confirmOrder(BuildContext dialogParent) async {
     // Дату доставки и способ оплаты НЕ требуем — оформляем сразу.
     final confirmed = await showDialog<bool>(
-      context: parentContext ?? context,
+      context: dialogParent,
       builder: (dialogContext) {
         return Dialog(
           backgroundColor: Colors.white,
@@ -430,10 +576,7 @@ class _CartScreenState extends State<CartScreen> {
       },
     );
 
-    if (confirmed != true) return false;
-
-    await _handleCheckout();
-    return _cartItems.isEmpty;
+    return confirmed == true;
   }
 
   String _paymentMethodLabel(String value) {
@@ -450,8 +593,49 @@ class _CartScreenState extends State<CartScreen> {
     }
   }
 
-  void _showSuccessDialog(String orderNumber) {
-    showDialog<void>(
+  Future<void> _showSuccessDialog(OrderSubmitResult result) {
+    final date = formatDateTime(result.createdAt);
+    return _showResultDialog(
+      icon: Icons.check_rounded,
+      iconColor: const Color(0xFF16A34A),
+      iconBackground: const Color(0xFFDCFCE7),
+      title: 'Заказ успешно отправлен',
+      message:
+          'Заказ передан менеджеру. Статус можно отслеживать в разделе «Мои заказы».',
+      highlightLabel: 'НОМЕР ЗАКАЗА',
+      highlightValue: result.orderNumber ?? '',
+      highlightCaption: date.isEmpty ? null : 'от $date',
+      primaryLabel: 'Продолжить покупки',
+      onPrimary: (dialogContext) {
+        Navigator.of(dialogContext).pop();
+        // Корзина пуста — возвращаемся в каталог, чтобы сразу продолжить заказ.
+        context.go('/');
+      },
+      secondaryLabel: 'Мои заказы',
+      onSecondary: (dialogContext) {
+        Navigator.of(dialogContext).pop();
+        context.go('/orders');
+      },
+    );
+  }
+
+  /// Единое окно итога: успех или ошибка. Закрывается только кнопками — итог
+  /// заказа нельзя пропустить случайным тапом мимо окна.
+  Future<void> _showResultDialog({
+    required IconData icon,
+    required Color iconColor,
+    required Color iconBackground,
+    required String title,
+    required String message,
+    required String primaryLabel,
+    required void Function(BuildContext dialogContext) onPrimary,
+    String? highlightLabel,
+    String? highlightValue,
+    String? highlightCaption,
+    String? secondaryLabel,
+    void Function(BuildContext dialogContext)? onSecondary,
+  }) {
+    return showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) {
@@ -479,92 +663,116 @@ class _CartScreenState extends State<CartScreen> {
                     height: 72,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: const Color(0xFFDCFCE7),
+                      color: iconBackground,
                       borderRadius: BorderRadius.circular(24),
                     ),
-                    child: const Icon(
-                      Icons.check_rounded,
-                      color: Color(0xFF16A34A),
-                      size: 38,
-                    ),
+                    child: Icon(icon, color: iconColor, size: 38),
                   ),
                   const SizedBox(height: 20),
-                  const Text(
-                    'Заказ оформлен',
+                  Text(
+                    title,
                     textAlign: TextAlign.center,
-                    style: TextStyle(
+                    style: const TextStyle(
                       color: Color(0xFF0F172A),
                       fontSize: 21,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
                   const SizedBox(height: 8),
-                  const Text(
-                    'Заказ передан в 1С для дальнейшей обработки.',
+                  Text(
+                    message,
                     textAlign: TextAlign.center,
-                    style: TextStyle(
+                    style: const TextStyle(
                       color: Color(0xFF64748B),
                       fontSize: 13,
                       height: 1.4,
                     ),
                   ),
-                  const SizedBox(height: 20),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 14,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF8FAFC),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: const Color(0xFFE2E8F0)),
-                    ),
-                    child: Column(
-                      children: [
-                        const Text(
-                          'НОМЕР ЗАКАЗА',
-                          style: TextStyle(
-                            color: Color(0xFF94A3B8),
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.8,
+                  if (highlightValue != null && highlightValue.isNotEmpty) ...[
+                    const SizedBox(height: 20),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF8FAFC),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: const Color(0xFFE2E8F0)),
+                      ),
+                      child: Column(
+                        children: [
+                          if (highlightLabel != null)
+                            Text(
+                              highlightLabel,
+                              style: const TextStyle(
+                                color: Color(0xFF94A3B8),
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.8,
+                              ),
+                            ),
+                          const SizedBox(height: 6),
+                          SelectableText(
+                            highlightValue,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Color(0xFF2563EB),
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          orderNumber,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: Color(0xFF2563EB),
-                            fontSize: 18,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ],
+                          if (highlightCaption != null) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              highlightCaption,
+                              style: const TextStyle(
+                                color: Color(0xFF64748B),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
                     ),
-                  ),
+                  ],
                   const SizedBox(height: 20),
                   SizedBox(
                     width: double.infinity,
                     height: 48,
                     child: FilledButton(
                       style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF0F172A),
+                        backgroundColor: const Color(0xFF2563EB),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
                       ),
-                      onPressed: () {
-                        dialogContext.pop();
-                        dialogContext.go('/');
-                      },
-                      child: const Text(
-                        'Вернуться в каталог',
-                        style: TextStyle(fontWeight: FontWeight.w700),
+                      onPressed: () => onPrimary(dialogContext),
+                      child: Text(
+                        primaryLabel,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
                     ),
                   ),
+                  if (secondaryLabel != null && onSecondary != null) ...[
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 44,
+                      child: TextButton(
+                        onPressed: () => onSecondary(dialogContext),
+                        child: Text(
+                          secondaryLabel,
+                          style: const TextStyle(
+                            color: Color(0xFF475569),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -604,12 +812,14 @@ class _CartScreenState extends State<CartScreen> {
       (_totalPrice - _discountAmount).clamp(0, double.infinity).toDouble();
 
   double get _totalPrice {
-    return _cartItems.fold<double>(0, (sum, item) => sum + item.totalWithItem);
+    return _activeItems.fold<double>(
+      0,
+      (sum, item) => sum + item.totalWithItem,
+    );
   }
 
-  int get _totalItems {
-    return _cartItems.fold<int>(0, (sum, item) => sum + item.quantity.toInt());
-  }
+  /// Позиций в заказе — строк корзины. «5 коробок» и «3 шт» одного товара — две позиции.
+  int get _totalItems => _activeItems.length;
 
   @override
   Widget build(BuildContext context) {
@@ -649,6 +859,35 @@ class _CartScreenState extends State<CartScreen> {
     );
   }
 
+  /// Строка корзины или, пока идёт окно отмены, плашка «Удалено · Отменить» на её месте.
+  Widget _buildLine(CartItem item, {bool wide = false}) {
+    final pending = _pendingRemovals.containsKey(item);
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 180),
+      alignment: Alignment.topCenter,
+      child: pending
+          ? _RemovedLineStrip(
+              key: ValueKey('removed-${item.lineKey}'),
+              item: item,
+              duration: _undoRemovalWindow,
+              onUndo: () => _undoRemoval(item),
+            )
+          : _CartItemCard(
+              key: ValueKey('line-${item.lineKey}'),
+              item: item,
+              wide: wide,
+              onDecrease: () =>
+                  _changeQuantity(item, item.quantity - item.step),
+              onIncrease: () =>
+                  _changeQuantity(item, item.quantity + item.step),
+              // В поле клиент вводит количество в выбранной единице.
+              onQuantityChanged: (value) =>
+                  _changeQuantity(item, value * item.step),
+              onRemove: () => _scheduleRemoval(item),
+            ),
+    );
+  }
+
   Widget _buildMobileLayout() {
     return Column(
       children: [
@@ -657,25 +896,7 @@ class _CartScreenState extends State<CartScreen> {
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
             itemCount: _cartItems.length,
             separatorBuilder: (_, __) => const SizedBox(height: 10),
-            itemBuilder: (context, index) {
-              return _CartItemCard(
-                item: _cartItems[index],
-                onDecrease: () => _changeQuantity(
-                  _cartItems[index],
-                  _cartItems[index].quantity - _cartItems[index].step,
-                ),
-                onIncrease: () => _changeQuantity(
-                  _cartItems[index],
-                  _cartItems[index].quantity + _cartItems[index].step,
-                ),
-                // В поле клиент вводит количество в выбранной единице.
-                onQuantityChanged: (value) => _changeQuantity(
-                  _cartItems[index],
-                  value * _cartItems[index].step,
-                ),
-                onRemove: () => _changeQuantity(_cartItems[index], 0),
-              );
-            },
+            itemBuilder: (context, index) => _buildLine(_cartItems[index]),
           ),
         ),
         _CheckoutBottomBar(
@@ -702,26 +923,8 @@ class _CartScreenState extends State<CartScreen> {
                 child: ListView.separated(
                   itemCount: _cartItems.length,
                   separatorBuilder: (_, __) => const SizedBox(height: 12),
-                  itemBuilder: (context, index) {
-                    return _CartItemCard(
-                      item: _cartItems[index],
-                      wide: true,
-                      onDecrease: () => _changeQuantity(
-                        _cartItems[index],
-                        _cartItems[index].quantity - _cartItems[index].step,
-                      ),
-                      onIncrease: () => _changeQuantity(
-                        _cartItems[index],
-                        _cartItems[index].quantity + _cartItems[index].step,
-                      ),
-                      // В поле клиент вводит количество в выбранной единице.
-                      onQuantityChanged: (value) => _changeQuantity(
-                        _cartItems[index],
-                        value * _cartItems[index].step,
-                      ),
-                      onRemove: () => _changeQuantity(_cartItems[index], 0),
-                    );
-                  },
+                  itemBuilder: (context, index) =>
+                      _buildLine(_cartItems[index], wide: true),
                 ),
               ),
               const SizedBox(width: 24),
@@ -746,7 +949,7 @@ class _CartScreenState extends State<CartScreen> {
                   onDiscountChanged: (value) {
                     setState(() => _discountPercent = value);
                   },
-                  onCheckout: _confirmAndCheckout,
+                  onCheckout: _checkoutFromPanel,
                 ),
               ),
             ],
@@ -766,6 +969,7 @@ class _CartItemCard extends StatelessWidget {
   final VoidCallback onRemove;
 
   const _CartItemCard({
+    super.key,
     required this.item,
     required this.onDecrease,
     required this.onIncrease,
@@ -829,22 +1033,23 @@ class _CartItemCard extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 5),
+                // Цена за единицу ЭТОЙ строки: за коробку — цена базовой единицы × вместимость.
                 Text(
-                  '${formatPrice(item.product.price)} / ${item.product.unit}',
+                  '${formatPrice(item.unitPrice)} / ${item.unitLabel}',
                   style: const TextStyle(
                     color: Color(0xFF64748B),
                     fontSize: 12,
                   ),
                 ),
-                // Цена всегда за базовую единицу, поэтому при наборе коробками
-                // показываем, сколько это базовых единиц.
+                // Строка коробками: поясняем, сколько это базовых единиц и почём базовая.
                 if (item.package != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 2),
                     child: Text(
-                      '${item.package!.name} по '
+                      '${item.package!.name} = '
                       '${formatNumber(item.package!.quantity)} ${item.product.unit}'
-                      ' · итого ${formatNumber(item.quantity)} ${item.product.unit}',
+                      ' · итого ${formatNumber(item.quantity)} ${item.product.unit}'
+                      ' · ${formatPrice(item.product.price)} / ${item.product.unit}',
                       style: const TextStyle(
                         color: Color(0xFF94A3B8),
                         fontSize: 11,
@@ -876,6 +1081,84 @@ class _CartItemCard extends StatelessWidget {
                   ],
                 ),
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Плашка на месте удалённой строки: кнопка «Отменить» и полоска оставшегося времени.
+class _RemovedLineStrip extends StatelessWidget {
+  final CartItem item;
+  final Duration duration;
+  final VoidCallback onUndo;
+
+  const _RemovedLineStrip({
+    super.key,
+    required this.item,
+    required this.duration,
+    required this.onUndo,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: const Color(0xFFF1F5F9),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 6, 6, 6),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.delete_outline_rounded,
+                  size: 20,
+                  color: Color(0xFF94A3B8),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '${item.product.name} · '
+                    '${formatNumber(item.displayQuantity)} ${item.unitLabel} удалено',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF475569),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: onUndo,
+                  child: const Text(
+                    'Отменить',
+                    style: TextStyle(
+                      color: Color(0xFF2563EB),
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Полоска тает за время окна отмены — видно, сколько ещё можно вернуть строку.
+          TweenAnimationBuilder<double>(
+            tween: Tween(begin: 1, end: 0),
+            duration: duration,
+            builder: (context, value, _) => LinearProgressIndicator(
+              value: value,
+              minHeight: 3,
+              backgroundColor: Colors.transparent,
+              color: const Color(0xFF2563EB),
             ),
           ),
         ],

@@ -12,40 +12,54 @@ import 'package:qarshi/presentations/widgets/product_gallery.dart';
 /// так экран и сетка каталога всегда показывают одно и то же число.
 class ProductDetailScreen extends StatelessWidget {
   final Product product;
-  final ValueChanged<num> onQuantityChanged;
 
-  /// Единица, которой клиент набирает товар (null — базовая).
-  final String? packageId;
-
-  /// Клиент переключил единицу: приходит новая упаковка и пересчитанное
-  /// количество в базовых единицах.
-  final void Function(String? packageId, num quantity)? onPackageChanged;
+  /// Изменение строки корзины: единица (null — базовая) и количество в базовых единицах.
+  final void Function(ItemPackage? package, num quantity) onQuantityChanged;
 
   const ProductDetailScreen({
     super.key,
     required this.product,
     required this.onQuantityChanged,
-    this.packageId,
-    this.onPackageChanged,
   });
 
   /// Открывает карточку товара поверх текущего экрана.
   static Future<void> open(
     BuildContext context, {
     required Product product,
-    required ValueChanged<num> onQuantityChanged,
-    String? packageId,
-    void Function(String? packageId, num quantity)? onPackageChanged,
+    required void Function(ItemPackage? package, num quantity)
+    onQuantityChanged,
   }) {
     return Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ProductDetailScreen(
           product: product,
           onQuantityChanged: onQuantityChanged,
-          packageId: packageId,
-          onPackageChanged: onPackageChanged,
         ),
       ),
+    );
+  }
+
+  /// Перестраивает дочерний виджет при любом изменении корзины или выбранной
+  /// единицы. Выбор единицы общий с сеткой каталога: переключили здесь — там тоже.
+  Widget _cartBuilder(
+    Widget Function(BuildContext context, ItemPackage? unit, num quantity)
+    builder,
+  ) {
+    return ValueListenableBuilder<Map<String, num>>(
+      valueListenable: cartNotifier,
+      builder: (context, cart, _) {
+        return ValueListenableBuilder<Map<String, String>>(
+          valueListenable: selectedUnitNotifier,
+          builder: (context, selected, _) {
+            final unit = resolveSelectedUnit(product, selected, cart);
+            return builder(
+              context,
+              unit,
+              cartQuantityOf(cart, product.id, unit?.id),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -148,13 +162,9 @@ class ProductDetailScreen extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          formatPrice(product.price),
-          style: const TextStyle(
-            fontSize: 26,
-            fontWeight: FontWeight.w800,
-            color: Color(0xFF0F172A),
-          ),
+        _cartBuilder(
+          (context, unit, _) =>
+              UnitPriceText(product: product, package: unit, fontSize: 26),
         ),
         const SizedBox(height: 10),
         Text(
@@ -184,12 +194,17 @@ class ProductDetailScreen extends StatelessWidget {
                 label: 'Остаток',
                 value: '${product.stock.toStringAsFixed(0)} ${product.unit}',
               ),
-              _AttributeRow(label: 'Единица измерения', value: product.unit),
-              // Цена всегда за базовую единицу — упаковка только множитель.
+              _AttributeRow(
+                label: 'Цена за ${product.unit.isEmpty ? 'ед.' : product.unit}',
+                value: formatPrice(product.price),
+              ),
+              // Упаковка — множитель базовой единицы, цена за неё считается из прайса.
               for (final package in product.packages)
                 _AttributeRow(
                   label: package.name,
-                  value: '${formatNumber(package.quantity)} ${product.unit}',
+                  value:
+                      '${formatNumber(package.quantity)} ${product.unit} · '
+                      '${formatPrice(product.priceFor(package))}',
                 ),
             ],
           ),
@@ -199,23 +214,15 @@ class ProductDetailScreen extends StatelessWidget {
   }
 
   Widget _buildCartControl() {
-    return ValueListenableBuilder<Map<String, num>>(
-      valueListenable: cartNotifier,
-      builder: (context, cart, _) {
-        return ValueListenableBuilder<Map<String, String>>(
-          valueListenable: cartPackageNotifier,
-          builder: (context, packages, _) {
-            return ProductCartControl(
-              product: product,
-              quantity: cart[product.id] ?? 0,
-              packageId: packages[product.id] ?? packageId,
-              onQuantityChanged: onQuantityChanged,
-              onPackageChanged: onPackageChanged,
-              dense: false,
-            );
-          },
-        );
-      },
+    return _cartBuilder(
+      (context, unit, quantity) => ProductCartControl(
+        product: product,
+        package: unit,
+        quantity: quantity,
+        onQuantityChanged: (value) => onQuantityChanged(unit, value),
+        onPackageChanged: (package) => selectUnitLocal(product.id, package?.id),
+        dense: false,
+      ),
     );
   }
 }

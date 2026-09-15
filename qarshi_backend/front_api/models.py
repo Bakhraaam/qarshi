@@ -60,9 +60,11 @@ class CartItem(models.Model):
     # остаётся верным везде. Дробное — потому что упаковка может быть, например, 2.5 л.
     quantity = models.DecimalField(max_digits=12, decimal_places=3, default=1,
                                    verbose_name="Количество (базовых единиц)")
-    # Упаковка, которой клиент набирал позицию — нужна только чтобы показать её
-    # обратно тем же способом («2 коробки», а не «20 шт») и перенести в заказ.
-    # SET_NULL: если 1С удалит упаковку, корзина не должна пропасть.
+    # Единица, в которой набрана ЭТА строка (null — базовая единица). Один товар может
+    # лежать в корзине несколькими строками: «5 коробок» и отдельно «3 шт».
+    # SET_NULL: если 1С удалит упаковку, корзина не должна пропасть. Перед удалением
+    # синхронизация сливает такие строки со строкой базовой единицы — иначе после
+    # SET_NULL получилось бы две базовые строки и нарушилась бы уникальность ниже.
     package = models.ForeignKey(
         ItemPackage,
         null=True,
@@ -78,9 +80,22 @@ class CartItem(models.Model):
         verbose_name = "Товар в корзине"
         verbose_name_plural = "Товары в корзинах"
 
-        # ИСПРАВЛЕНО: У одного юзера конкретный товар может быть в корзине только один раз
-        # в рамках одной конкретной организации
-        unique_together = ('user', 'item', 'organization')
+        # Одна строка на пару «товар + единица» у пользователя в филиале.
+        # Два условных ограничения вместо одного unique_together: в Postgres NULL не равен
+        # NULL, и ограничение с package пропустило бы сколько угодно базовых строк.
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'item', 'organization', 'package'],
+                condition=models.Q(package__isnull=False),
+                name='cartitem_unique_packaged_line',
+            ),
+            models.UniqueConstraint(
+                fields=['user', 'item', 'organization'],
+                condition=models.Q(package__isnull=True),
+                name='cartitem_unique_base_line',
+            ),
+        ]
 
     def __str__(self):
-        return f"{self.user.username} — {self.item.name} ({self.quantity}) [{self.organization.name}]"
+        unit = self.package.name if self.package_id else (self.item.unit or '')
+        return f"{self.user.username} — {self.item.name} ({self.quantity} {unit}) [{self.organization.name}]"
