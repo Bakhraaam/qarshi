@@ -289,10 +289,10 @@ class OrderItemInline(admin.TabularInline):
 class OrderAdmin(admin.ModelAdmin):
     # ИСПРАВЛЕНО: Вывели 'order_number_1c' в общий список заказов для удобства
     list_display = ['order_number', 'order_number_1c', 'organization', 'client', 'user',
-                    'status', 'positions_count', 'total_amount', 'created_at']
+                    'status', 'positions_count', 'total_amount', 'delivery_date', 'created_at']
     list_display_links = ['order_number', 'order_number_1c']
 
-    list_filter = ['organization', 'status', 'created_at']
+    list_filter = ['organization', 'status', 'payment_method', 'delivery_date', 'created_at']
     date_hierarchy = 'created_at'
 
     # ИСПРАВЛЕНО: Теперь искать заказы можно и по номеру из 1С тоже
@@ -311,6 +311,9 @@ class OrderAdmin(admin.ModelAdmin):
         ('Основная информация', {
             # ИСПРАВЛЕНО: Разместили номер сайта и номер 1С рядом в одном блоке
             'fields': ('order_number', 'order_number_1c', 'organization', 'user', 'status')
+        }),
+        ('Пожелания клиента', {
+            'fields': ('delivery_date', 'payment_method', 'comment')
         }),
         ('Финансовые итоги', {
             'fields': ('total_amount',)

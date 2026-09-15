@@ -89,10 +89,16 @@ class Order1COutputSerializer(serializers.ModelSerializer):
     organization_id = serializers.UUIDField(read_only=True)
     organization_prefix = serializers.CharField(source='organization.prefix', read_only=True)
 
+    # Код способа оплаты (cashless/cash/transfer/deferred) и его название — чтобы 1С
+    # могла сопоставить по коду, а менеджер сразу видел понятный текст.
+    payment_method_display = serializers.CharField(source='get_payment_method_display', read_only=True)
+
     class Meta:
         model = Order
         fields = ['id', 'order_number', 'organization_id', 'organization_prefix',
-                  'client', 'total_amount', 'status', 'created_at', 'items']
+                  'client', 'total_amount', 'status', 'created_at',
+                  'delivery_date', 'payment_method', 'payment_method_display', 'comment',
+                  'items']
 
     def get_client(self, obj):
         user = obj.user

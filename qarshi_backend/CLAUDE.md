@@ -131,6 +131,12 @@ the client's `currentUser` is a snapshot from login, and 1C may link the counter
 open. `GET auth/me/` (JWT) returns the same `user` payload as login so the client can refresh that
 snapshot without re-authenticating; the Flutter cart calls it on open and before checkout.
 
+`POST orders/` also takes the checkout form: `delivery_date` (`YYYY-MM-DD`, not in the past by the
+project time zone), `payment_method` (`cashless` / `cash` / `transfer` / `deferred`) and `comment`
+(≤ 300 chars). All optional; a bad value is a 400 before the cart is touched. They are stored on
+`Order` and exported in `orders/pull/` together with `payment_method_display`. The client-side discount
+in the wide checkout panel is deliberately **not** sent: the order total is always computed by the server.
+
 ### Product images
 `items/` still accepts `images` as a list of path strings, and now also as objects
 `{id, path|url|image_path, is_main, is_invalid}` so 1C can send its own GUID and a validity flag.

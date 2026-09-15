@@ -198,7 +198,11 @@ class _CartScreenState extends State<CartScreen> {
     // Заказ собирается из серверной корзины, поэтому удалённые, но ещё не
     // отправленные строки сначала действительно удаляем.
     await _commitAllRemovals();
-    final result = await _api.createOrder();
+    final result = await _api.createOrder(
+      deliveryDate: _deliveryDate,
+      paymentMethod: _paymentMethod,
+      comment: _commentController.text,
+    );
 
     if (!mounted) return;
     // Закрываем окно «Отправляем заказ…». Между его показом и этой строкой ничего
@@ -207,7 +211,13 @@ class _CartScreenState extends State<CartScreen> {
     setState(() => _isCheckingOut = false);
 
     if (result.isSuccess) {
-      setState(() => _cartItems.clear());
+      setState(() {
+        _cartItems.clear();
+        // Пожелания относились к этому заказу — следующий начинаем с чистой формы.
+        _deliveryDate = null;
+        _paymentMethod = 'cashless';
+      });
+      _commentController.clear();
       // Заказ оформлен — корзина пуста и на всех экранах.
       cartNotifier.value = <String, num>{};
       await _showSuccessDialog(result);

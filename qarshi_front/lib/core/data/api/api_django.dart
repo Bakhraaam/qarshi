@@ -284,10 +284,25 @@ class DjangoApi {
 
   /// Оформляет заказ из корзины. Никогда не бросает исключение: и успех, и любая
   /// ошибка возвращаются в [OrderSubmitResult], чтобы экран всегда мог показать итог.
-  Future<OrderSubmitResult> createOrder() async {
+  ///
+  /// [deliveryDate] — желаемая дата отгрузки (уходит только датой, без времени),
+  /// [paymentMethod] — код способа оплаты (`cashless`, `cash`…), [comment] —
+  /// комментарий клиента. Всё необязательно; сервер сохраняет и передаёт это в 1С.
+  Future<OrderSubmitResult> createOrder({
+    DateTime? deliveryDate,
+    String? paymentMethod,
+    String? comment,
+  }) async {
     try {
       final response = await _dio.post(
         'orders/',
+        data: {
+          if (deliveryDate != null) 'delivery_date': _isoDate(deliveryDate),
+          if (paymentMethod != null && paymentMethod.isNotEmpty)
+            'payment_method': paymentMethod,
+          if (comment != null && comment.trim().isNotEmpty)
+            'comment': comment.trim(),
+        },
         options: Options(headers: {'Authorization': 'Bearer $tokenAccess'}),
       );
       final data = response.data;
@@ -317,6 +332,13 @@ class DjangoApi {
       return OrderSubmitResult.failure('Ошибка оформления: $e');
     }
   }
+
+  /// Дата без времени и часового пояса: `2026-09-20`. Через toIso8601String ушло бы
+  /// и время, а переход в UTC мог бы сдвинуть день назад.
+  static String _isoDate(DateTime date) =>
+      '${date.year.toString().padLeft(4, '0')}-'
+      '${date.month.toString().padLeft(2, '0')}-'
+      '${date.day.toString().padLeft(2, '0')}';
 
   /// Перечитывает профиль вошедшего пользователя с сервера и обновляет [currentUser].
   ///

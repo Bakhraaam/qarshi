@@ -2,6 +2,8 @@ from rest_framework import viewsets, status, mixins
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.db import transaction
+from django.utils import timezone
+from django.utils.dateparse import parse_date
 from decimal import Decimal
 
 # Импортируем модели строго по вашей структуре
@@ -68,6 +70,41 @@ class FrontendOrderViewSet(mixins.CreateModelMixin,
         context['price_type_id'] = price_type.id if price_type else None
         return context
 
+    @staticmethod
+    def _parse_checkout_details(data):
+        """Пожелания клиента из формы оформления: дата отгрузки, оплата, комментарий.
+
+        Всё необязательно. Возвращает (поля для Order, текст ошибки или None).
+        """
+        details = {}
+
+        raw_date = data.get('delivery_date')
+        if raw_date:
+            delivery_date = parse_date(str(raw_date)) if isinstance(raw_date, str) else None
+            if not delivery_date:
+                return None, "Дата отгрузки должна быть в формате ГГГГ-ММ-ДД"
+            # «Сегодня» — по часовому поясу проекта (Asia/Tashkent), а не по UTC сервера.
+            if delivery_date < timezone.localdate():
+                return None, "Дата отгрузки не может быть в прошлом"
+            details['delivery_date'] = delivery_date
+
+        payment_method = (data.get('payment_method') or '').strip()
+        if payment_method:
+            allowed = dict(Order.PAYMENT_METHOD_CHOICES)
+            if payment_method not in allowed:
+                return None, f"Неизвестный способ оплаты: {payment_method}"
+            details['payment_method'] = payment_method
+
+        comment = data.get('comment') or ''
+        if not isinstance(comment, str):
+            return None, "Комментарий должен быть строкой"
+        comment = comment.strip()
+        if len(comment) > Order.COMMENT_MAX_LENGTH:
+            return None, f"Комментарий длиннее {Order.COMMENT_MAX_LENGTH} символов"
+        details['comment'] = comment
+
+        return details, None
+
     def create(self, request, *args, **kwargs):
         """Оформление заказа: перенос товаров из корзины текущего субдомена в новый заказ"""
         user = request.user
@@ -89,6 +126,11 @@ class FrontendOrderViewSet(mixins.CreateModelMixin,
                 },
                 status=status.HTTP_403_FORBIDDEN
             )
+
+        # Пожелания проверяем до корзины: с ошибкой в форме ничего не трогаем.
+        checkout_details, details_error = self._parse_checkout_details(request.data)
+        if details_error:
+            return Response({"ok": False, "message": details_error}, status=status.HTTP_400_BAD_REQUEST)
 
         # 1. Достаем товары из корзины текущего филиала (+ prefetch цен против N+1)
         cart_items = CartItem.objects.filter(
@@ -157,7 +199,8 @@ class FrontendOrderViewSet(mixins.CreateModelMixin,
             # Создаем шапку заказа
             order = Order.objects.create(
                 user=user,
-                organization=self.current_organization
+                organization=self.current_organization,
+                **checkout_details,
             )
 
             # Проставляем созданный order_id во все позиции в памяти

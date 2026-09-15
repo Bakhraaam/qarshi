@@ -445,6 +445,60 @@ class ItemPackageFlowTests(TestCase):
                                     **self.auth)
         self.assertEqual(accepted.status_code, 200)
 
+    def order(self, **body):
+        return self.client.post(self.api("orders/"), body, content_type="application/json",
+                                **self.auth)
+
+    def test_checkout_details_are_saved_and_sent_to_1c(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        self.put_line(3)
+        tomorrow = timezone.localdate() + timedelta(days=1)
+
+        response = self.order(delivery_date=tomorrow.isoformat(), payment_method="cash",
+                              comment="  Доставить до 15:00  ")
+        self.assertEqual(response.status_code, 200)
+
+        order = OrderItem.objects.get().order
+        self.assertEqual(order.delivery_date, tomorrow)
+        self.assertEqual(order.payment_method, "cash")
+        self.assertEqual(order.comment, "Доставить до 15:00")
+
+        detail = response.json()["result"]
+        self.assertEqual(detail["delivery_date"], tomorrow.isoformat())
+        self.assertEqual(detail["payment_method_display"], "Наличные")
+
+        # Та же информация уходит в 1С при выгрузке новых заказов.
+        token = Token.objects.create(user=User.objects.create_user(username="1c", password="x"))
+        pulled = self.client.get(f"/sync_1c/orders/pull/?prefix={self.org.prefix}",
+                                 HTTP_AUTHORIZATION=f"Token {token.key}").json()["result"][0]
+        self.assertEqual(pulled["delivery_date"], tomorrow.isoformat())
+        self.assertEqual(pulled["payment_method"], "cash")
+        self.assertEqual(pulled["payment_method_display"], "Наличные")
+        self.assertEqual(pulled["comment"], "Доставить до 15:00")
+
+    def test_checkout_details_are_optional(self):
+        self.put_line(3)
+        self.assertEqual(self.order().status_code, 200)
+        order = OrderItem.objects.get().order
+        self.assertIsNone(order.delivery_date)
+        self.assertEqual((order.payment_method, order.comment), ("", ""))
+
+    def test_invalid_checkout_details_are_rejected_before_touching_cart(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        self.put_line(3)
+        yesterday = (timezone.localdate() - timedelta(days=1)).isoformat()
+        for body in ({"delivery_date": yesterday},
+                     {"delivery_date": "20.09.2026"},
+                     {"payment_method": "bitcoin"},
+                     {"comment": "x" * 301}):
+            response = self.order(**body)
+            self.assertEqual(response.status_code, 400, body)
+            self.assertFalse(response.json()["ok"])
+        self.assertFalse(OrderItem.objects.exists())
+        self.assertTrue(CartItem.objects.exists())
+
     def test_auth_me_requires_token(self):
         self.assertEqual(self.client.get(self.api("auth/me/")).status_code, 401)
 

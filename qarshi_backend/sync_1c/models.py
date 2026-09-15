@@ -300,7 +300,25 @@ class Order(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="Дата изменения")
 
+    PAYMENT_METHOD_CHOICES = [
+        ('cashless', 'Безналичный расчет'),
+        ('cash', 'Наличные'),
+        ('transfer', 'Перевод'),
+        ('deferred', 'Отсрочка платежа'),
+    ]
+    # Лимит комментария совпадает с полем ввода в приложении.
+    COMMENT_MAX_LENGTH = 300
+
     order_number_1c = models.CharField(max_length=50, blank=True, null=True, verbose_name="Номер в 1С")
+
+    # --- Пожелания клиента из формы оформления ---
+    # Всё необязательно: заказ можно оформить, ничего не заполняя.
+    delivery_date = models.DateField(null=True, blank=True,
+                                     verbose_name="Желаемая дата отгрузки")
+    payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES, blank=True, default="",
+                                      verbose_name="Способ оплаты")
+    comment = models.CharField(max_length=COMMENT_MAX_LENGTH, blank=True, default="",
+                               verbose_name="Комментарий клиента")
     organization = models.ForeignKey('Organization', on_delete=models.CASCADE, related_name='orders',
                                      verbose_name="Организация", null=False,)
 
