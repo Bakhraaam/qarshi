@@ -507,3 +507,66 @@ class Sync1cPackagesAndImagesTests(TestCase):
         self.assertEqual(self.post("items/", [row]).status_code, 200)
         self.assertEqual(ItemImage.objects.filter(is_invalid=True).count(), 1)
         self.assertEqual(ItemImage.objects.filter(is_main=True).count(), 1)
+
+
+class Sync1cUserProfileListFilterTests(TestCase):
+    """Выгрузка профилей в 1С с фильтром по организации."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.org_a = Organization.objects.create(inn="1", name="Филиал А", prefix="a")
+        cls.org_b = Organization.objects.create(inn="2", name="Филиал Б", prefix="b")
+        pt_a = PriceType.objects.create(name="Розница", organization=cls.org_a, is_default=True)
+        pt_b = PriceType.objects.create(name="Розница", organization=cls.org_b, is_default=True)
+
+        def profile(username, org, price_type, guid=None):
+            user = User.objects.create_user(username=username, password="x")
+            return UserProfile.objects.create(user=user, name=username, organization=org,
+                                              price_type=price_type, guid_partner1c=guid)
+
+        cls.a_linked = profile("a_linked", cls.org_a, pt_a, guid="p-1")
+        cls.a_unlinked = profile("a_unlinked", cls.org_a, pt_a)
+        cls.b_unlinked = profile("b_unlinked", cls.org_b, pt_b)
+
+    def setUp(self):
+        user = User.objects.create_user(username="1c", password="x")
+        self.auth = {"HTTP_AUTHORIZATION": f"Token {Token.objects.create(user=user).key}"}
+
+    def get(self, path, **params):
+        return self.client.get(f"/sync_1c/{path}", params, **self.auth)
+
+    @staticmethod
+    def names(response):
+        return sorted(row["name"] for row in response.json()["result"])
+
+    def test_without_filter_returns_all_organizations(self):
+        response = self.get("user-profiles/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.names(response), ["a_linked", "a_unlinked", "b_unlinked"])
+        self.assertIsNone(response.json()["organization_id"])
+
+    def test_filter_by_organization(self):
+        response = self.get("user-profiles/", organization_id=str(self.org_a.id))
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(self.names(response), ["a_linked", "a_unlinked"])
+        self.assertEqual(body["count"], 2)
+        self.assertEqual(body["organization_id"], str(self.org_a.id))
+
+    def test_filter_combines_with_unlinked(self):
+        # Отдельный маршрут unlinked/ наследует фильтр.
+        response = self.get("user-profiles/unlinked/", organization_id=str(self.org_a.id))
+        self.assertEqual(self.names(response), ["a_unlinked"])
+        # И флаг в общем маршруте работает так же.
+        response = self.get("user-profiles/", organization_id=str(self.org_b.id), only_unlinked=1)
+        self.assertEqual(self.names(response), ["b_unlinked"])
+
+    def test_bad_uuid_is_400(self):
+        response = self.get("user-profiles/", organization_id="не-uuid")
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.json()["ok"])
+
+    def test_unknown_organization_is_404_not_empty_list(self):
+        response = self.get("user-profiles/", organization_id=str(uuid.uuid4()))
+        self.assertEqual(response.status_code, 404)
+        self.assertFalse(response.json()["ok"])

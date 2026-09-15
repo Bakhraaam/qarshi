@@ -7,7 +7,7 @@ urlpatterns = [
     # Маршрут для пользователей:
     path('user-profile/', Sync1cUpdateUsersView.as_view(), name='1c_update_user-profiles'),
     # Профили контрагентов для 1С:
-    path('user-profiles/', Sync1cUserProfileListView.as_view(), name='1c_user_profiles_list'),           # общий список (?only_unlinked=1)
+    path('user-profiles/', Sync1cUserProfileListView.as_view(), name='1c_user_profiles_list'),           # общий список (?only_unlinked=1, ?organization_id=<uuid>)
     path('user-profiles/unlinked/', Sync1cUserProfileUnlinkedView.as_view(), name='1c_user_profiles_unlinked'),  # только непривязанные
     path('user-profiles/upsert/', Sync1cUserProfileUpsertView.as_view(), name='1c_user_profiles_upsert'),        # создание/обновление из 1С
     # Маршрут для получения новых пользователей

@@ -1173,6 +1173,7 @@ class Sync1cUserProfileListView(Base1cAPIView):
     """
     GET: список профилей контрагентов для 1С.
     ?only_unlinked=1 — только непривязанные (пустой guid_partner1c).
+    ?organization_id=<uuid> — только профили этой организации (филиала).
     """
     only_unlinked = False
 
@@ -1180,6 +1181,25 @@ class Sync1cUserProfileListView(Base1cAPIView):
         qs = (UserProfile.objects
               .select_related('user', 'user__telegram_account', 'price_type', 'organization')
               .all())
+
+        # Без параметра — профили всех филиалов, как и раньше. С параметром отвечаем
+        # ошибкой на кривой или неизвестный UUID, а не пустым списком: иначе 1С
+        # решила бы, что у филиала просто нет клиентов.
+        organization_id = (request.query_params.get('organization_id') or '').strip()
+        if organization_id:
+            try:
+                organization_id = uuid.UUID(organization_id)
+            except ValueError:
+                return Response(
+                    {"ok": False, "message": "Параметр 'organization_id' должен быть UUID"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if not Organization.objects.filter(id=organization_id).exists():
+                return Response(
+                    {"ok": False, "message": f"Организация {organization_id} не найдена"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            qs = qs.filter(organization_id=organization_id)
 
         flag = request.query_params.get('only_unlinked')
         want_unlinked = self.only_unlinked or (str(flag).lower() in ('1', 'true', 'yes'))
@@ -1191,7 +1211,8 @@ class Sync1cUserProfileListView(Base1cAPIView):
         return Response({
             "ok": True,
             "only_unlinked": want_unlinked,
-            "count": qs.count(),
+            "organization_id": str(organization_id) if organization_id else None,
+            "count": len(serializer.data),
             "result": serializer.data,
         }, status=status.HTTP_200_OK)
 
