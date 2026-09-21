@@ -372,6 +372,28 @@ class DjangoApi {
     }
   }
 
+  /// История заявок клиента на акт сверки (последние — первыми).
+  Future<List<ActRequest>> getActRequests() async {
+    try {
+      final response = await _dio.get(
+        'reports/act/',
+        options: Options(headers: {'Authorization': 'Bearer $tokenAccess'}),
+      );
+      final data = response.data;
+      if (response.statusCode == 200 &&
+          data is Map &&
+          data['results'] is List) {
+        return (data['results'] as List)
+            .whereType<Map>()
+            .map((e) => ActRequest.fromJson(Map<String, dynamic>.from(e)))
+            .toList();
+      }
+      return [];
+    } catch (e) {
+      return [];
+    }
+  }
+
   /// Текущее состояние заявки на акт сверки (экран опрашивает, пока pending).
   Future<ActRequest?> getActRequest(String id) async {
     try {

@@ -562,6 +562,9 @@ class ActRequest {
   /// Текст от 1С, когда акт построить не удалось.
   final String message;
 
+  /// Когда клиент отправил заявку (ISO с сервера).
+  final String createdAt;
+
   const ActRequest({
     required this.id,
     required this.status,
@@ -570,9 +573,21 @@ class ActRequest {
     this.filename = '',
     this.fileUrl = '',
     this.message = '',
+    this.createdAt = '',
   });
 
   bool get isPending => status == 'pending';
+
+  /// Период в виде «01.09.2026 — 21.09.2026».
+  String get periodLabel =>
+      '${formatIsoDate(dateFrom)} — ${formatIsoDate(dateTo)}';
+
+  String get statusLabel => switch (status) {
+    'ready' => 'Готов',
+    'failed' => 'Ошибка',
+    _ => 'Формируется',
+  };
+
   bool get isReady => status == 'ready';
   bool get isFailed => status == 'failed';
 
@@ -585,6 +600,7 @@ class ActRequest {
       filename: json['filename']?.toString() ?? '',
       fileUrl: json['file_url']?.toString() ?? '',
       message: json['message']?.toString() ?? '',
+      createdAt: json['created_at']?.toString() ?? '',
     );
   }
 }

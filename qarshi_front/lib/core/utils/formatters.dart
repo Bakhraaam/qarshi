@@ -20,6 +20,16 @@ String formatNumber(num value) {
   return value.toString();
 }
 
+/// Дата без времени: «2026-09-01» -> «01.09.2026». Пустая строка остаётся пустой.
+String formatIsoDate(String isoDate) {
+  if (isoDate.isEmpty) return '';
+  try {
+    return DateFormat('dd.MM.yyyy').format(DateTime.parse(isoDate));
+  } catch (e) {
+    return isoDate;
+  }
+}
+
 /// 1. Переводит ISO-строку в красивую дату (например: 30.05.2026)
 String formatDate(String isoString) {
   if (isoString.isEmpty) return '';

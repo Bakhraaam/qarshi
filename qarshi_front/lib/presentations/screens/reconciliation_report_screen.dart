@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:qarshi/core/data/api/api_django.dart';
 import 'package:qarshi/core/data/models.dart';
+import 'package:qarshi/core/utils/formatters.dart';
 import 'package:qarshi/core/utils/telegram_launch.dart';
 
 class ReconciliationReportScreen extends StatefulWidget {
@@ -34,6 +35,11 @@ class _ReconciliationReportScreenState
   Timer? _pollTimer;
   DateTime? _pollStartedAt;
 
+  /// Прошлые заявки этого клиента: заказал акт, вышел из приложения — файл
+  /// должен найтись здесь, а не только в чате Telegram.
+  List<ActRequest> _history = const [];
+  bool _isHistoryLoading = true;
+
   @override
   void initState() {
     super.initState();
@@ -42,6 +48,28 @@ class _ReconciliationReportScreenState
 
     _dateFrom = DateTime(now.year, now.month, 1);
     _dateTo = now;
+
+    _loadHistory();
+  }
+
+  /// Подтягивает прошлые заявки и, если последняя ещё формируется, продолжает её ждать.
+  Future<void> _loadHistory() async {
+    final history = await _api.getActRequests();
+    if (!mounted) return;
+
+    setState(() {
+      _history = history;
+      _isHistoryLoading = false;
+      // Открыли экран после выхода — показываем последнюю заявку и её период,
+      // иначе карточка результата относилась бы к другим датам.
+      if (_request == null && history.isNotEmpty) {
+        _request = history.first;
+        _dateFrom = DateTime.tryParse(history.first.dateFrom) ?? _dateFrom;
+        _dateTo = DateTime.tryParse(history.first.dateTo) ?? _dateTo;
+      }
+    });
+
+    if (_request?.isPending ?? false) _startPolling();
   }
 
   @override
@@ -158,7 +186,20 @@ class _ReconciliationReportScreenState
       return;
     }
 
+    _refreshHistory(request);
     if (request.isPending) _startPolling();
+  }
+
+  /// Держит список в согласии с текущей заявкой, не дёргая сервер лишний раз.
+  void _refreshHistory(ActRequest request) {
+    final updated = [..._history];
+    final index = updated.indexWhere((item) => item.id == request.id);
+    if (index >= 0) {
+      updated[index] = request;
+    } else {
+      updated.insert(0, request);
+    }
+    setState(() => _history = updated);
   }
 
   /// Пока экран открыт, сами спрашиваем сервер: так клиент увидит готовый акт,
@@ -184,18 +225,32 @@ class _ReconciliationReportScreenState
       if (!fresh.isPending) {
         timer.cancel();
         setState(() => _request = fresh);
+        _refreshHistory(fresh);
       }
     });
   }
 
-  Future<void> _downloadReport() async {
-    final url = _request?.fileUrl ?? '';
+  Future<void> _downloadReport() async => _openAct(_request);
+
+  /// Открывает готовый акт. Ссылка подписана, поэтому работает и в браузере Telegram.
+  void _openAct(ActRequest? request) {
+    final url = request?.fileUrl ?? '';
     if (url.isEmpty) {
       _toast('Файл ещё не готов');
       return;
     }
-    // Ссылка подписана и живёт неделю — её же клиент получил в Telegram.
     openExternalLink(url);
+  }
+
+  /// Показать прошлую заявку в основной карточке.
+  void _selectFromHistory(ActRequest request) {
+    setState(() {
+      _request = request;
+      _dateFrom = DateTime.tryParse(request.dateFrom) ?? _dateFrom;
+      _dateTo = DateTime.tryParse(request.dateTo) ?? _dateTo;
+    });
+    if (request.isReady) _openAct(request);
+    if (request.isPending) _startPolling();
   }
 
   void _toast(String message) {
@@ -256,6 +311,8 @@ class _ReconciliationReportScreenState
         _buildPeriodCard(),
         const SizedBox(height: 14),
         _buildResultCard(),
+        const SizedBox(height: 14),
+        _buildHistoryCard(),
       ],
     );
   }
@@ -266,7 +323,16 @@ class _ReconciliationReportScreenState
       children: [
         SizedBox(width: 360, child: _buildPeriodCard()),
         const SizedBox(width: 20),
-        Expanded(child: _buildResultCard()),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildResultCard(),
+              const SizedBox(height: 20),
+              _buildHistoryCard(),
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -374,6 +440,16 @@ class _ReconciliationReportScreenState
     );
   }
 
+  Widget _buildHistoryCard() {
+    return _HistoryCard(
+      requests: _history,
+      isLoading: _isHistoryLoading,
+      selectedId: _request?.id,
+      onTap: _selectFromHistory,
+      onDownload: _openAct,
+    );
+  }
+
   Widget _buildResultCard() {
     final request = _request;
 
@@ -383,8 +459,8 @@ class _ReconciliationReportScreenState
 
     if (request != null && request.isReady) {
       return _GeneratedReportCard(
-        dateFrom: _formatDate(_dateFrom),
-        dateTo: _formatDate(_dateTo),
+        // Период берём из самой заявки: поля выбора мог поменять клиент.
+        period: request.periodLabel,
         filename: request.filename,
         onDownload: _downloadReport,
       );
@@ -603,6 +679,183 @@ class _ReportLoadingCard extends StatelessWidget {
   }
 }
 
+/// Прошлые заявки: период, состояние и кнопка скачивания у готовых.
+class _HistoryCard extends StatelessWidget {
+  final List<ActRequest> requests;
+  final bool isLoading;
+  final String? selectedId;
+  final ValueChanged<ActRequest> onTap;
+  final ValueChanged<ActRequest> onDownload;
+
+  const _HistoryCard({
+    required this.requests,
+    required this.isLoading,
+    required this.selectedId,
+    required this.onTap,
+    required this.onDownload,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'История запросов',
+            style: TextStyle(
+              color: Color(0xFF0F172A),
+              fontSize: 17,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Готовые акты остаются здесь — их можно скачать повторно.',
+            style: TextStyle(
+              color: Color(0xFF64748B),
+              fontSize: 12,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 14),
+          if (isLoading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 18),
+              child: Center(
+                child: SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2.5),
+                ),
+              ),
+            )
+          else if (requests.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 14),
+              child: Text(
+                'Вы ещё не запрашивали акт сверки.',
+                style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+              ),
+            )
+          else
+            for (final request in requests)
+              _HistoryRow(
+                request: request,
+                selected: request.id == selectedId,
+                onTap: () => onTap(request),
+                onDownload: () => onDownload(request),
+              ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HistoryRow extends StatelessWidget {
+  final ActRequest request;
+  final bool selected;
+  final VoidCallback onTap;
+  final VoidCallback onDownload;
+
+  const _HistoryRow({
+    required this.request,
+    required this.selected,
+    required this.onTap,
+    required this.onDownload,
+  });
+
+  static const _statusColors = {
+    'ready': (Color(0xFF16A34A), Color(0xFFDCFCE7)),
+    'failed': (Color(0xFFDC2626), Color(0xFFFEE2E2)),
+    'pending': (Color(0xFFD97706), Color(0xFFFEF3C7)),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final (textColor, background) =
+        _statusColors[request.status] ?? _statusColors['pending']!;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: selected ? const Color(0xFFEFF6FF) : const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        request.periodLabel,
+                        style: const TextStyle(
+                          color: Color(0xFF0F172A),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        'Запрошен ${formatDateTime(request.createdAt)}',
+                        style: const TextStyle(
+                          color: Color(0xFF94A3B8),
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: background,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    request.statusLabel,
+                    style: TextStyle(
+                      color: textColor,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                if (request.isReady)
+                  IconButton(
+                    tooltip: 'Скачать',
+                    onPressed: onDownload,
+                    icon: const Icon(
+                      Icons.download_rounded,
+                      size: 20,
+                      color: Color(0xFF2563EB),
+                    ),
+                  )
+                else
+                  const SizedBox(width: 8),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// 1С не смогла построить акт: показываем её причину как есть.
 class _FailedReportCard extends StatelessWidget {
   final String message;
@@ -667,14 +920,12 @@ class _FailedReportCard extends StatelessWidget {
 }
 
 class _GeneratedReportCard extends StatelessWidget {
-  final String dateFrom;
-  final String dateTo;
+  final String period;
   final String filename;
   final VoidCallback onDownload;
 
   const _GeneratedReportCard({
-    required this.dateFrom,
-    required this.dateTo,
+    required this.period,
     required this.filename,
     required this.onDownload,
   });
@@ -742,7 +993,7 @@ class _GeneratedReportCard extends StatelessWidget {
             ),
             child: Column(
               children: [
-                _ReportInfoRow(label: 'Период', value: '$dateFrom — $dateTo'),
+                _ReportInfoRow(label: 'Период', value: period),
                 const SizedBox(height: 12),
                 // Имя файла приходит из 1С — показываем его, а не выдуманный формат.
                 _ReportInfoRow(

@@ -165,7 +165,9 @@ The site never calls 1C: the request is queued and 1C picks it up, exactly like 
    dependency). No download link in the chat: a forwarded message would otherwise hand the document
    to anyone. If the upload fails (too big, network), the bot falls back to a plain "акт готов,
    откройте приложение" message. `GET reports/act/<id>/` is what the open screen polls (every 3 s for
-   3 minutes), `?with_file=1` also returns base64.
+   3 minutes), `?with_file=1` also returns base64. `GET reports/act/` lists the client's last 10
+   requests — the screen loads it on open, so an act that arrived while the app was closed is still
+   there, and a request left in `pending` resumes polling.
 
 In the app the file is **not** served from `/media/`: `reports/act/<id>/file/?t=<signature>` checks a
 `TimestampSigner` token (24 h) instead of JWT, because the download is a plain navigation where no
