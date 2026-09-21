@@ -64,16 +64,20 @@ so no extra DB field and nothing to sync with 1C. Anything other than a bad secr
 Telegram must not retry what we cannot process.
 
 - `bot/texts.py` — all wording (business tone, ru only). Edit texts here, never in handlers.
-- `bot/api.py` — Bot API client on stdlib `urllib` (no new dependency) + the one keyboard. The bot deliberately does
-  **not** duplicate in-app navigation: its only button is the contact request, removed once the number arrives.
-  The Mini App is opened by Telegram's own entry points (menu button / "Open" on the bot), not by bot buttons.
+- `bot/api.py` — Bot API client on stdlib `urllib` (no new dependency) + the one keyboard. The bot does
+  **not** duplicate in-app navigation: its only button is the contact request, removed once the number
+  arrives. The Mini App is opened by Telegram's own entry points (menu button / "Open" on the bot).
 - `bot/handlers.py` — `/start`, contact, foreign contact, free text, blocked access.
 - `bot/accounts.py` — shared with `TelegramAuthView`.
 
-Phone is **requested, not required**: nothing in the WebApp gates on `TelegramAccount.phone`, the bot just asks once.
-There is no way to match a phone to a 1C counterparty on the backend —
-`UserProfile` has no phone field — so after a contact arrives the bot only promises "передано менеджеру"; the real
-link appears when 1C fills `guid_partner1c`.
+Phone is **requested, not required**: nothing gates on `TelegramAccount.phone`, but 1C matches a signup to a
+counterparty by it (`user-profiles/unlinked/` carries `telegram.phone`), so the bot asks on `/start` until it
+has one. The number must be the sender's own, and `_handle_contact` enforces that on four fronts: the button
+itself (Telegram fills the number, the client cannot edit it), `contact.user_id == message.from.id` (rejects
+both a contact card of another user and a hand-made contact, which has no `user_id` at all), no
+`forward_*` on the message, and the phone not already attached to a different `TelegramAccount` — otherwise a
+second Telegram account could claim someone else's counterparty. After a contact arrives the bot only promises
+"передано менеджеру"; the real link appears when 1C fills `guid_partner1c`.
 
 Registering the webhook (needs a public HTTPS URL; locally use the ngrok tunnel):
 ```bash
@@ -144,6 +148,29 @@ in the wide checkout panel is deliberately **not** sent: the order total is alwa
 back with a single flag. Two ways to set it: `POST sync_1c/images/validity/` with
 `[{"id": ..., "is_invalid": true}, ...]` (no file transfer), or an `is_invalid` field alongside an upload
 to `image_item_upload/`. Deleting a picture outright is still `image_item_upload/` with an empty `image`.
+
+### Акт сверки (reconciliation report)
+The site never calls 1C: the request is queued and 1C picks it up, exactly like orders.
+
+1. Client asks: `POST /api/v1/<org>/reports/act/` `{date_from, date_to}` → an
+   `ActReconciliationRequest` in status `pending` (403 `unregistered` without `guid_partner1c` —
+   there is no counterparty to reconcile; a repeat for the same period reuses the pending row;
+   period ≤ 1 year).
+2. 1C polls `GET /sync_1c/reports/act/pending/?prefix=<org>&limit=N` — each row carries
+   `guid_partner1c` and the period.
+3. 1C returns the printable form: `POST /sync_1c/reports/act/upload/` with
+   `{id, filename, file_base64}` (or multipart `file`), or a refusal `{id, ok: false, message}`.
+4. The backend stores the file, flips the status and **sends the PDF itself into the client's chat**
+   (`bot/notify.py` → `api.send_document`, multipart built by hand in `api.call_multipart` so no new
+   dependency). No download link in the chat: a forwarded message would otherwise hand the document
+   to anyone. If the upload fails (too big, network), the bot falls back to a plain "акт готов,
+   откройте приложение" message. `GET reports/act/<id>/` is what the open screen polls (every 3 s for
+   3 minutes), `?with_file=1` also returns base64.
+
+In the app the file is **not** served from `/media/`: `reports/act/<id>/file/?t=<signature>` checks a
+`TimestampSigner` token (24 h) instead of JWT, because the download is a plain navigation where no
+Authorization header can be set. That link is only ever handed to the screen that just polled the
+status, never sent anywhere.
 
 ### Order lifecycle
 Frontend places an order (`front_api/views/orders.py`) → `Order`/`OrderItem` created (status `new`, human number auto-generated as `ORD-YYYYMMDD-NNNN` in `Order.save()`) → 1C pulls it via `sync_1c` `orders/pull` → 1C writes back `order_number_1c` and status via `orders/update`.

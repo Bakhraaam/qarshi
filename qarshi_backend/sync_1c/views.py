@@ -18,7 +18,8 @@ import base64
 from decimal import Decimal, InvalidOperation
 from django.core.files.base import ContentFile
 
-from front_api.models import CartItem, TelegramAccount
+from front_api.models import ActReconciliationRequest, CartItem, TelegramAccount
+from front_api.bot.notify import notify_act_ready
 from front_api.cache import bump_catalog_version
 
 # from django.utils.dateparse import parse_datetime
@@ -1134,6 +1135,117 @@ class Sync1cUpdateOrdersView(Base1cAPIView):
             "ok": True,
             "message": f"Успешно синхронизировано заказов: {len(orders_data)}"
         }, status=status.HTTP_200_OK)
+
+
+
+class Sync1cPendingActsView(Base1cAPIView):
+    """
+    GET /sync_1c/reports/act/pending/ — заявки на акт сверки, которые ждут 1С.
+
+    Опциональные параметры: ?prefix=<org_prefix> — только один филиал,
+    ?limit=<N> — сколько отдать за раз (по умолчанию 50).
+    Заявка остаётся в выдаче, пока по ней не придёт файл или отказ, поэтому
+    повторный запрос после сбоя ничего не теряет.
+    """
+
+    def get(self, request, *args, **kwargs):
+        org_prefix = request.query_params.get('prefix')
+        try:
+            limit = max(1, min(int(request.query_params.get('limit', 50)), 200))
+        except (TypeError, ValueError):
+            limit = 50
+
+        requests_qs = (ActReconciliationRequest.objects
+                       .filter(status=ActReconciliationRequest.STATUS_PENDING)
+                       .select_related('organization', 'user')
+                       .order_by('created_at'))
+        if org_prefix:
+            requests_qs = requests_qs.filter(organization__prefix=org_prefix)
+
+        result = [
+            {
+                "id": str(r.id),
+                "organization_id": str(r.organization_id),
+                "organization_prefix": r.organization.prefix,
+                "guid_partner1c": r.guid_partner1c,
+                "date_from": r.date_from.isoformat(),
+                "date_to": r.date_to.isoformat(),
+                "created_at": r.created_at.isoformat(),
+                "username": r.user.username,
+            }
+            for r in requests_qs[:limit]
+        ]
+        return Response({"ok": True, "count": len(result), "result": result},
+                        status=status.HTTP_200_OK)
+
+
+class Sync1cUploadActView(Base1cAPIView):
+    """
+    POST /sync_1c/reports/act/upload/ — 1С присылает готовый акт сверки.
+
+    JSON:      {"id": "<id заявки>", "filename": "act.pdf", "file_base64": "JVBERi0..."}
+    multipart: id=<id заявки>, file=<файл>
+    Отказ:     {"id": "<id заявки>", "ok": false, "message": "Нет данных за период"}
+
+    После загрузки клиенту сразу уходит сообщение в Telegram со ссылкой на файл.
+    Неудачная отправка сообщения не отменяет загрузку: файл уже доступен в приложении.
+    """
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
+
+    def post(self, request):
+        request_id = request.data.get('id')
+        if not request_id:
+            return Response({"ok": False, "message": "Поле 'id' (идентификатор заявки) обязательно"},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        act_request = (ActReconciliationRequest.objects
+                       .select_related('organization', 'user')
+                       .filter(id=request_id).first())
+        if not act_request:
+            return Response({"ok": False, "message": f"Заявка {request_id} не найдена"},
+                            status=status.HTTP_404_NOT_FOUND)
+
+        # Явный отказ 1С: нет данных за период, контрагент не найден и т.п.
+        if not parse_1c_bool(request.data.get('ok', True)):
+            act_request.status = ActReconciliationRequest.STATUS_FAILED
+            act_request.message = str(request.data.get('message') or 'Не удалось сформировать акт')[:500]
+            act_request.save(update_fields=['status', 'message', 'updated_at'])
+            notify_act_ready(act_request)
+            return Response({"ok": True, "message": "Отказ записан, клиент уведомлён"},
+                            status=status.HTTP_200_OK)
+
+        filename = (request.data.get('filename') or '').strip()
+        upload = request.data.get('file')
+
+        if upload is None or upload == '':
+            # base64 — так проще слать из 1С, чем собирать multipart
+            raw = request.data.get('file_base64') or request.data.get('pdf_base64')
+            if not raw:
+                return Response({"ok": False, "message": "Нужен файл: 'file' (multipart) или 'file_base64'"},
+                                status=status.HTTP_400_BAD_REQUEST)
+            try:
+                # 1С может прислать и data:application/pdf;base64,... — срезаем обёртку
+                payload = str(raw).split(';base64,')[-1]
+                content = base64.b64decode(payload)
+            except Exception:
+                return Response({"ok": False, "message": "Не удалось разобрать base64"},
+                                status=status.HTTP_400_BAD_REQUEST)
+            upload = ContentFile(content)
+
+        if not filename:
+            filename = f"act_{act_request.date_from}_{act_request.date_to}.pdf"
+
+        act_request.file.save(filename, upload, save=False)
+        act_request.filename = filename
+        act_request.status = ActReconciliationRequest.STATUS_READY
+        act_request.message = ''
+        act_request.save(update_fields=['file', 'filename', 'status', 'message', 'updated_at'])
+
+        notified = notify_act_ready(act_request)
+        return Response(
+            {"ok": True, "message": "Акт принят" + (", клиент уведомлён" if notified else "")},
+            status=status.HTTP_200_OK,
+        )
 
 
 class Sync1cUpdateStocksView(Base1cAPIView):

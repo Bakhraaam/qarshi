@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import Sync1cGetNewTelegramUsersView, ItemImageUploadView, Sync1cUpdateImagesValidityView, Sync1cPullOrdersView, Sync1cUpdateOrdersView, Sync1cUpdateStocksView, Sync1cUpdateOrganizationsView, Sync1cUpdateItemsView, Sync1cUpdatePricelistView, Sync1cUpdateItemTypesView, Sync1cUpdatePriceTypesView, Sync1cUpdateUsersView, Sync1cUserProfileListView, Sync1cUserProfileUnlinkedView, Sync1cUserProfileUpsertView
+from .views import Sync1cGetNewTelegramUsersView, ItemImageUploadView, Sync1cUpdateImagesValidityView, Sync1cPendingActsView, Sync1cUploadActView, Sync1cPullOrdersView, Sync1cUpdateOrdersView, Sync1cUpdateStocksView, Sync1cUpdateOrganizationsView, Sync1cUpdateItemsView, Sync1cUpdatePricelistView, Sync1cUpdateItemTypesView, Sync1cUpdatePriceTypesView, Sync1cUpdateUsersView, Sync1cUserProfileListView, Sync1cUserProfileUnlinkedView, Sync1cUserProfileUpsertView
 urlpatterns = [
     # старый метод
     # path('data/', BulkDataSyncView.as_view(), name='bulk_data_sync'),
@@ -33,5 +33,9 @@ urlpatterns = [
     path('orders/update/', Sync1cUpdateOrdersView.as_view(), name='1c_update_orders'),
     # Маршрут для остатки товаров:
     path('stocks/update/', Sync1cUpdateStocksView.as_view(), name='1c_update_stocks'),
+
+    # Акт сверки: 1С забирает заявки клиентов и присылает готовый файл
+    path('reports/act/pending/', Sync1cPendingActsView.as_view(), name='1c_pending_acts'),
+    path('reports/act/upload/', Sync1cUploadActView.as_view(), name='1c_upload_act'),
 
 ]

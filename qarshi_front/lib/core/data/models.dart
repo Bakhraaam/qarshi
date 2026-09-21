@@ -547,3 +547,44 @@ class OrderSubmitResult {
   /// Клиент не привязан к контрагенту в 1С — показываем отдельное окно.
   bool get isUnregistered => code == 'unregistered';
 }
+
+/// Заявка на акт сверки. Файл готовит 1С, поэтому заявка живёт в трёх состояниях.
+class ActRequest {
+  final String id;
+  final String status; // pending | ready | failed
+  final String dateFrom;
+  final String dateTo;
+  final String filename;
+
+  /// Ссылка на готовый файл (подписанная, живёт неделю). Пусто, пока не готов.
+  final String fileUrl;
+
+  /// Текст от 1С, когда акт построить не удалось.
+  final String message;
+
+  const ActRequest({
+    required this.id,
+    required this.status,
+    required this.dateFrom,
+    required this.dateTo,
+    this.filename = '',
+    this.fileUrl = '',
+    this.message = '',
+  });
+
+  bool get isPending => status == 'pending';
+  bool get isReady => status == 'ready';
+  bool get isFailed => status == 'failed';
+
+  factory ActRequest.fromJson(Map<String, dynamic> json) {
+    return ActRequest(
+      id: json['id']?.toString() ?? '',
+      status: json['status']?.toString() ?? 'pending',
+      dateFrom: json['date_from']?.toString() ?? '',
+      dateTo: json['date_to']?.toString() ?? '',
+      filename: json['filename']?.toString() ?? '',
+      fileUrl: json['file_url']?.toString() ?? '',
+      message: json['message']?.toString() ?? '',
+    );
+  }
+}

@@ -1,5 +1,8 @@
 import 'package:telegram_web_app/telegram_web_app.dart';
 
+// Условный импорт: на web — package:web, на остальных платформах заглушка.
+import 'host/host_stub.dart' if (dart.library.js_interop) 'host/host_web.dart';
+
 /// Определяет, запущено ли приложение внутри Telegram WebApp.
 ///
 /// Признак — непустая `initData`: в обычном браузере она пустая, а внутри
@@ -28,4 +31,21 @@ bool shouldRequestFullscreen() {
   } catch (_) {
     return false;
   }
+}
+
+/// Открывает внешнюю ссылку (готовый акт сверки и т.п.).
+///
+/// Внутри Telegram обычный window.open блокируется вебвью, поэтому там просим
+/// открыть ссылку сам Telegram. В браузере — новой вкладкой.
+void openExternalLink(String url) {
+  if (url.isEmpty) return;
+  try {
+    if (isRunningInTelegram()) {
+      TelegramWebApp.instance.openLink(url);
+      return;
+    }
+  } catch (_) {
+    // Старый клиент Telegram — падаем в обычное открытие вкладки.
+  }
+  openUrl(url);
 }

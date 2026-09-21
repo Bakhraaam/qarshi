@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import CartItem, TelegramAccount
+from .models import ActReconciliationRequest, CartItem, TelegramAccount
 from django.utils.html import format_html
 
 
@@ -133,3 +133,22 @@ class TelegramAccountAdmin(admin.ModelAdmin):
         return "Аватарка отсутствует"
 
     avatar_large_preview.short_description = "Превью аватара"
+
+@admin.register(ActReconciliationRequest)
+class ActReconciliationRequestAdmin(admin.ModelAdmin):
+    """Очередь заявок на акт сверки: видно, что ждёт 1С и что уже отдано клиенту."""
+    list_display = ['created_at', 'organization', 'user', 'period', 'status',
+                    'filename', 'notified_at']
+    list_filter = ['organization', 'status', 'created_at']
+    search_fields = ['id', 'user__username', 'guid_partner1c', 'filename']
+    list_select_related = ['organization', 'user']
+    date_hierarchy = 'created_at'
+    list_per_page = 50
+    # Всё заполняют клиент и 1С — руками править нечего.
+    readonly_fields = ['id', 'organization', 'user', 'guid_partner1c', 'date_from', 'date_to',
+                       'status', 'file', 'filename', 'message', 'created_at', 'updated_at',
+                       'notified_at']
+
+    @admin.display(description="Период")
+    def period(self, obj):
+        return f"{obj.date_from:%d.%m.%Y} — {obj.date_to:%d.%m.%Y}"

@@ -4,7 +4,8 @@ from .views.catalog import FrontendCategoryViewSet, FrontendProductViewSet
 from .views.auth import CurrentUserView, FrontendLoginView, FrontendRegisterView, TelegramAuthView
 from .views.cart import FrontendCartViewSet
 from .views.orders import FrontendOrderViewSet
-from .views.reports import ActReconciliationView
+from .views.reports import (ActReconciliationDetailView, ActReconciliationFileView,
+                           ActReconciliationView)
 from .views.telegram_bot import TelegramWebhookView
 
 router = SimpleRouter()
@@ -22,6 +23,10 @@ urlpatterns = [
     path('auth/me/', CurrentUserView.as_view(), name='frontend_current_user'),
 
     path('reports/act/', ActReconciliationView.as_view(), name='frontend_act'),
+    path('reports/act/<uuid:request_id>/', ActReconciliationDetailView.as_view(),
+         name='frontend_act_detail'),
+    path('reports/act/<uuid:request_id>/file/', ActReconciliationFileView.as_view(),
+         name='frontend_act_file'),
 
     # Вебхук Telegram-бота филиала (регистрируется командой set_telegram_webhook)
     path('telegram/webhook/', TelegramWebhookView.as_view(), name='frontend_telegram_webhook'),

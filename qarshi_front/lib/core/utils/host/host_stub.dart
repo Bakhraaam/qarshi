@@ -10,3 +10,6 @@ void dispatchWindowResize() {}
 
 /// Вне веба полноэкранного режима Mini App нет.
 bool isTelegramFullscreen() => false;
+
+/// Вне веба ссылки открывать нечем.
+void openUrl(String url) {}

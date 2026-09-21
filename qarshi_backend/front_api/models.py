@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import models
 from django.contrib.auth.models import User
 from sync_1c.models import Item, ItemPackage, Organization
@@ -99,3 +101,55 @@ class CartItem(models.Model):
     def __str__(self):
         unit = self.package.name if self.package_id else (self.item.unit or '')
         return f"{self.user.username} — {self.item.name} ({self.quantity} {unit}) [{self.organization.name}]"
+
+class ActReconciliationRequest(models.Model):
+    """Заявка клиента на акт сверки.
+
+    Сайт не ходит в 1С сам: заявка складывается сюда, 1С забирает её через
+    `sync_1c/reports/act/pending/`, формирует печатную форму и присылает файл в
+    `sync_1c/reports/act/upload/`. После загрузки клиенту уходит сообщение в Telegram.
+    """
+    STATUS_PENDING = 'pending'
+    STATUS_READY = 'ready'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Ожидает 1С'),
+        (STATUS_READY, 'Готов'),
+        (STATUS_FAILED, 'Ошибка'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE, related_name='act_requests',
+        verbose_name="Организация"
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='act_requests',
+        verbose_name="Клиент"
+    )
+    # Копия на момент заявки: по нему 1С находит контрагента. Если менеджер позже
+    # перепривяжет профиль, уже отданный акт останется по тому, кого запрашивали.
+    guid_partner1c = models.CharField(max_length=255, verbose_name="GUID контрагента 1С")
+
+    date_from = models.DateField(verbose_name="Период с")
+    date_to = models.DateField(verbose_name="Период по")
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING,
+                              db_index=True, verbose_name="Статус")
+    file = models.FileField(upload_to='acts/', null=True, blank=True, verbose_name="Файл акта")
+    filename = models.CharField(max_length=255, blank=True, default="", verbose_name="Имя файла")
+    # Текст ошибки от 1С («нет данных за период») — показывается клиенту как есть.
+    message = models.CharField(max_length=500, blank=True, default="", verbose_name="Сообщение 1С")
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True, verbose_name="Создана")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Изменена")
+    notified_at = models.DateTimeField(null=True, blank=True,
+                                       verbose_name="Клиент уведомлён в Telegram")
+
+    class Meta:
+        verbose_name = "Заявка на акт сверки"
+        verbose_name_plural = "Заявки на акт сверки"
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Акт {self.date_from}–{self.date_to} ({self.get_status_display()})"

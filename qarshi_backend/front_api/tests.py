@@ -1,6 +1,12 @@
 """Тесты Telegram-бота филиала, упаковок товара и приёма данных из 1С."""
+import base64
+import tempfile
 import uuid
+from email import policy
+from email.parser import BytesParser
 from decimal import Decimal
+
+from django.core.files.base import ContentFile
 
 from django.contrib.auth.models import User
 from django.core.cache import cache
@@ -9,8 +15,9 @@ from rest_framework.authtoken.models import Token
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from front_api.bot import api, handlers, polling
+from front_api.reports_links import sign_request_id
 from sync_1c.views import item_package_pk
-from front_api.models import CartItem, TelegramAccount
+from front_api.models import ActReconciliationRequest, CartItem, TelegramAccount
 from sync_1c.models import (
     Item, ItemImage, ItemPackage, ItemStock, ItemType, Organization,
     OrderItem, PriceList, PriceType, UserProfile,
@@ -64,14 +71,26 @@ class TelegramBotTests(TestCase):
         return self.update(contact={"user_id": user_id, "phone_number": phone})
 
     # --- сценарии ---
-    def test_start_without_phone_asks_contact(self):
-        handlers.handle_update(self.org, self.update(text="/start"))
+    def assert_no_buttons(self):
+        """Номер получен: клавиатура с кнопкой убирается."""
         text, buttons = self.last_message()
+        self.assertEqual(buttons, [])
+        self.assertTrue(self.last_markup().get("remove_keyboard"))
+        return text
 
-        self.assertIn("оптовый заказ через Telegram", text)
-        # Единственная кнопка бота — запрос телефона, навигацию он не дублирует
+    def assert_asks_phone(self):
+        """Единственная кнопка бота — запрос контакта, её ставит сам Telegram."""
+        text, buttons = self.last_message()
         self.assertEqual(len(buttons), 1)
         self.assertTrue(buttons[0].get("request_contact"))
+        return text
+
+    def test_start_without_phone_asks_contact(self):
+        handlers.handle_update(self.org, self.update(text="/start"))
+        text = self.assert_asks_phone()
+
+        self.assertIn("Здравствуйте, Иван", text)
+        self.assertIn("Отправьте номер телефона", text)
 
         account = TelegramAccount.objects.get(telegram_id=TG_ID)
         self.assertEqual(account.user.username, f"tg_{TG_ID}")
@@ -79,16 +98,12 @@ class TelegramBotTests(TestCase):
 
     def test_own_contact_saves_normalized_phone_and_reports_pending(self):
         handlers.handle_update(self.org, self.contact())
-        text, buttons = self.last_message()
+        text = self.assert_no_buttons()
 
         self.assertEqual(TelegramAccount.objects.get(telegram_id=TG_ID).phone, "998901234567")
         self.assertIn("+998901234567 принят", text)
         self.assertIn("заявка передана менеджеру", text)
         self.assertIn("Вы ещё не подтверждены как контрагент.", text)
-        self.assertIn("+998901234567", text.split("Вопросы: ")[-1])
-        # Номер получен — клавиатура с запросом телефона убирается
-        self.assertEqual(buttons, [])
-        self.assertTrue(self.last_markup().get("remove_keyboard"))
 
     def test_linked_partner_gets_contract_price_message(self):
         handlers.handle_update(self.org, self.update(text="/start"))
@@ -103,34 +118,53 @@ class TelegramBotTests(TestCase):
         self.assertIn("Ваш контрагент: ООО «Ромашка»", text)
         self.assertIn("по вашему договору", text)
 
-    def test_foreign_contact_rejected(self):
+    def test_contact_of_another_telegram_user_rejected(self):
         handlers.handle_update(self.org, self.contact(user_id=TG_ID + 1))
-        text, buttons = self.last_message()
+        text = self.assert_asks_phone()
 
-        self.assertIn("контакт другого пользователя", text)
-        self.assertTrue(any(b.get("request_contact") for b in buttons))
+        self.assertIn("только ваш собственный номер", text)
         self.assertFalse(TelegramAccount.objects.get(telegram_id=TG_ID).phone)
 
-    def test_start_with_known_phone_has_no_keyboard(self):
+    def test_hand_made_contact_without_user_id_rejected(self):
+        """Контакт, созданный вручную с любым номером: Telegram не ставит ему user_id."""
+        handlers.handle_update(self.org, self.update(
+            contact={"phone_number": "+998 (99) 000-00-00", "first_name": "Директор"}))
+        self.assert_asks_phone()
+        self.assertFalse(TelegramAccount.objects.get(telegram_id=TG_ID).phone)
+
+    def test_forwarded_contact_rejected(self):
+        """Пересланная карточка — не «свой номер здесь и сейчас», даже с верным user_id."""
+        update = self.contact()
+        update["message"]["forward_origin"] = {"type": "user", "sender_user": {"id": TG_ID + 5}}
+        handlers.handle_update(self.org, update)
+        self.assert_asks_phone()
+        self.assertFalse(TelegramAccount.objects.get(telegram_id=TG_ID).phone)
+
+    def test_phone_already_taken_by_another_account_rejected(self):
+        """Иначе второй аккаунт Telegram занял бы чужого контрагента по его номеру."""
+        stranger = User.objects.create_user(username="tg_other", password="x")
+        TelegramAccount.objects.create(user=stranger, telegram_id=TG_ID + 9, phone="998901234567")
+
         handlers.handle_update(self.org, self.contact())
-        handlers.handle_update(self.org, self.update(text="/start"))
-        text, buttons = self.last_message()
+        text, _ = self.last_message()
 
-        self.assertIn("Вы авторизованы как Иван", text)
-        self.assertEqual(buttons, [])
-        self.assertTrue(self.last_markup().get("remove_keyboard"))
+        self.assertIn("уже привязан к другому аккаунту", text)
+        self.assertFalse(TelegramAccount.objects.get(telegram_id=TG_ID).phone)
 
-    def test_free_text_reminds_about_button(self):
+    def test_free_text_before_and_after_phone(self):
         handlers.handle_update(self.org, self.update(text="привет"))
-        text, buttons = self.last_message()
-        self.assertIn("принимает только номер телефона", text)
-        self.assertTrue(any(b.get("request_contact") for b in buttons))
+        self.assertIn("только номер телефона", self.assert_asks_phone())
 
         handlers.handle_update(self.org, self.contact())
         handlers.handle_update(self.org, self.update(text="а есть масло 5w30?"))
-        text, buttons = self.last_message()
-        self.assertIn("внутри приложения", text)
-        self.assertEqual(buttons, [])
+        text = self.assert_no_buttons()
+        self.assertIn("заказы, цены и остатки — в приложении", text)
+
+    def test_start_after_phone_has_no_keyboard(self):
+        handlers.handle_update(self.org, self.contact())
+        handlers.handle_update(self.org, self.update(text="/start"))
+        text = self.assert_no_buttons()
+        self.assertIn("Откройте приложение", text)
 
     def test_blocked_profile_gets_support_phone(self):
         handlers.handle_update(self.org, self.update(text="/start"))
@@ -723,3 +757,248 @@ class Sync1cUserProfileListFilterTests(TestCase):
         response = self.get("user-profiles/", organization_id=str(uuid.uuid4()))
         self.assertEqual(response.status_code, 404)
         self.assertFalse(response.json()["ok"])
+
+
+# Файлы актов тесты пишут в отдельную папку, чтобы не засорять media проекта.
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp(prefix='qarshi-test-media-'))
+class ActReconciliationFlowTests(TestCase):
+    """Акт сверки: заявка клиента -> очередь для 1С -> файл -> сообщение в Telegram."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.org = Organization.objects.create(
+            inn="55", name="Филиал", prefix="act", support_phone="+998901112233",
+            telegram_bot_token="123:FAKE",
+        )
+        cls.price_type = PriceType.objects.create(name="Розница", organization=cls.org, is_default=True)
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(username="act_client", password="x")
+        self.profile = UserProfile.objects.create(
+            user=self.user, name="ООО Ромашка", price_type=self.price_type,
+            organization=self.org, guid_partner1c="P-77",
+        )
+        TelegramAccount.objects.create(user=self.user, telegram_id=555000111, phone="998901112233")
+        access = RefreshToken.for_user(self.user).access_token
+        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {access}"}
+
+        self.token_1c = Token.objects.create(user=User.objects.create_user(username="1c_act", password="x"))
+        self.auth_1c = {"HTTP_AUTHORIZATION": f"Token {self.token_1c.key}"}
+
+        # Бот не должен ходить в сеть из тестов
+        self.sent = []
+        self.documents = []
+        self._real_call = api.call
+        self._real_multipart = api.call_multipart
+        api.call = lambda token, method, payload=None: (
+            self.sent.append((method, payload)) or {"ok": True}
+        )
+        api.call_multipart = lambda token, method, fields, file_field, filename, content, content_type: (
+            self.documents.append({"method": method, "fields": fields,
+                                   "filename": filename, "content": content}) or {"ok": True}
+        )
+
+    def tearDown(self):
+        api.call = self._real_call
+        api.call_multipart = self._real_multipart
+
+    def api_url(self, path):
+        return f"/api/v1/{self.org.prefix}/{path}"
+
+    def ask_act(self, date_from="2026-01-01", date_to="2026-01-31"):
+        return self.client.post(self.api_url("reports/act/"),
+                                {"date_from": date_from, "date_to": date_to},
+                                content_type="application/json", **self.auth)
+
+    def pending(self):
+        return self.client.get(f"/sync_1c/reports/act/pending/?prefix={self.org.prefix}",
+                               **self.auth_1c).json()
+
+    def upload(self, payload):
+        return self.client.post("/sync_1c/reports/act/upload/", payload,
+                                content_type="application/json", **self.auth_1c)
+
+    def test_full_cycle_from_request_to_telegram_message(self):
+        response = self.ask_act()
+        self.assertEqual(response.status_code, 200)
+        created = response.json()["result"]
+        self.assertEqual(created["status"], "pending")
+        self.assertIsNone(created["file_url"])
+
+        # 1С видит заявку со своим GUID контрагента и периодом
+        queue = self.pending()
+        self.assertEqual(queue["count"], 1)
+        self.assertEqual(queue["result"][0]["guid_partner1c"], "P-77")
+        self.assertEqual(queue["result"][0]["date_from"], "2026-01-01")
+
+        pdf = base64.b64encode(b"%PDF-1.4 fake").decode()
+        self.assertEqual(self.upload({"id": created["id"], "filename": "akt.pdf",
+                                      "file_base64": pdf}).status_code, 200)
+
+        # Заявка ушла из очереди, файл лежит, клиент получил его в чат
+        self.assertEqual(self.pending()["count"], 0)
+        act = ActReconciliationRequest.objects.get(id=created["id"])
+        self.assertEqual(act.status, "ready")
+        self.assertIsNotNone(act.notified_at)
+
+        document = self.documents[-1]
+        self.assertEqual(document["method"], "sendDocument")
+        self.assertEqual(document["filename"], "akt.pdf")
+        self.assertEqual(document["content"], b"%PDF-1.4 fake")
+        self.assertIn("акт сверки за период 01.01.2026 — 31.01.2026 готов",
+                      document["fields"]["caption"])
+        # Ссылки в чате нет: пересланное сообщение не должно давать доступ к документу.
+        self.assertEqual(self.sent, [])
+
+        # На сайте акт открывается по подписанной ссылке от свежего запроса статуса
+        detail = self.client.get(self.api_url(f"reports/act/{created['id']}/?with_file=1"),
+                                 **self.auth).json()["result"]
+        self.assertEqual(detail["status"], "ready")
+        self.assertEqual(base64.b64decode(detail["pdf_base64"]), b"%PDF-1.4 fake")
+        download = self.client.get(detail["file_url"].replace("https://act.qarshi1s.uz", ""))
+        self.assertEqual(download.status_code, 200)
+        self.assertEqual(b"".join(download.streaming_content), b"%PDF-1.4 fake")
+
+    def test_client_is_told_when_the_file_cannot_be_sent_to_chat(self):
+        """Файл не ушёл в чат — клиент всё равно узнаёт, что акт готов."""
+        api.call_multipart = lambda *a, **kw: {"ok": False, "description": "file too big"}
+        created = self.ask_act().json()["result"]
+        pdf = base64.b64encode(b"%PDF-1.4 fake").decode()
+        self.upload({"id": created["id"], "filename": "akt.pdf", "file_base64": pdf})
+
+        self.assertIn("Откройте приложение", self.sent[-1][1]["text"])
+        self.assertIsNotNone(ActReconciliationRequest.objects.get(id=created["id"]).notified_at)
+
+    def test_file_link_requires_valid_signature(self):
+        self.ask_act()
+        act = ActReconciliationRequest.objects.get()
+        act.file.save("akt.pdf", ContentFile(b"%PDF-1.4 fake"), save=False)
+        act.status = ActReconciliationRequest.STATUS_READY
+        act.save()
+
+        path = self.api_url(f"reports/act/{act.id}/file/")
+        self.assertEqual(self.client.get(path).status_code, 404)
+        self.assertEqual(self.client.get(f"{path}?t=подделка").status_code, 404)
+        self.assertEqual(self.client.get(f"{path}?t={sign_request_id(act.id)}").status_code, 200)
+
+    def test_failure_from_1c_is_shown_to_client(self):
+        created = self.ask_act().json()["result"]
+        self.assertEqual(self.upload({"id": created["id"], "ok": False,
+                                      "message": "Нет данных за период"}).status_code, 200)
+
+        act = ActReconciliationRequest.objects.get(id=created["id"])
+        self.assertEqual(act.status, "failed")
+        self.assertEqual(act.message, "Нет данных за период")
+        self.assertIn("Нет данных за период", self.sent[-1][1]["text"])
+
+        detail = self.client.get(self.api_url(f"reports/act/{created['id']}/"),
+                                 **self.auth).json()["result"]
+        self.assertEqual(detail["status"], "failed")
+        self.assertIsNone(detail["file_url"])
+
+    def test_repeated_request_for_same_period_reuses_the_queue_entry(self):
+        first = self.ask_act().json()["result"]["id"]
+        second = self.ask_act().json()["result"]["id"]
+        self.assertEqual(first, second)
+        self.assertEqual(ActReconciliationRequest.objects.count(), 1)
+
+    def test_unregistered_client_cannot_ask_for_act(self):
+        self.profile.guid_partner1c = ""
+        self.profile.save(update_fields=["guid_partner1c"])
+
+        response = self.ask_act()
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["code"], "unregistered")
+        self.assertFalse(ActReconciliationRequest.objects.exists())
+
+    def test_period_is_validated(self):
+        for body in ({"date_from": "2026-02-01", "date_to": "2026-01-01"},
+                     {"date_from": "01.01.2026", "date_to": "31.01.2026"},
+                     {"date_from": "2020-01-01", "date_to": "2026-01-01"}):
+            response = self.client.post(self.api_url("reports/act/"), body,
+                                        content_type="application/json", **self.auth)
+            self.assertEqual(response.status_code, 400, body)
+        self.assertFalse(ActReconciliationRequest.objects.exists())
+
+    def test_client_sees_only_own_requests(self):
+        self.ask_act()
+        stranger = User.objects.create_user(username="stranger", password="x")
+        UserProfile.objects.create(user=stranger, name="Чужой", price_type=self.price_type,
+                                   organization=self.org, guid_partner1c="P-99")
+        other_auth = {"HTTP_AUTHORIZATION": f"Bearer {RefreshToken.for_user(stranger).access_token}"}
+
+        mine = self.client.get(self.api_url("reports/act/"), **self.auth).json()["results"]
+        theirs = self.client.get(self.api_url("reports/act/"), **other_auth).json()["results"]
+        self.assertEqual(len(mine), 1)
+        self.assertEqual(theirs, [])
+
+        act_id = mine[0]["id"]
+        self.assertEqual(
+            self.client.get(self.api_url(f"reports/act/{act_id}/"), **other_auth).status_code, 404)
+
+
+class TelegramSendDocumentTests(TestCase):
+    """Тело multipart для sendDocument собрано вручную — проверяем, что оно разбирается."""
+
+    def test_multipart_body_is_well_formed(self):
+        captured = {}
+
+        class FakeResponse:
+            def read(self):
+                return b'{"ok": true, "result": {}}'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def fake_urlopen(request, timeout=None):
+            captured['url'] = request.full_url
+            captured['body'] = request.data
+            captured['content_type'] = request.headers['Content-type']
+            return FakeResponse()
+
+        real_urlopen = api.urllib.request.urlopen
+        api.urllib.request.urlopen = fake_urlopen
+        try:
+            result = api.send_document(
+                "123:FAKE", 555, "Акт сверки.pdf", b"%PDF-1.4 payload",
+                caption="Акт готов",
+            )
+        finally:
+            api.urllib.request.urlopen = real_urlopen
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(captured['url'].endswith("/sendDocument"))
+
+        # Разбираем ровно так, как это сделает сервер Telegram
+        message = BytesParser(policy=policy.HTTP).parsebytes(
+            b"Content-Type: " + captured['content_type'].encode() + b"\r\n\r\n" + captured['body']
+        )
+        parts = {
+            part.get_param('name', header='content-disposition'): part
+            for part in message.iter_parts()
+        }
+        self.assertEqual(parts['chat_id'].get_payload(decode=True), b"555")
+        self.assertEqual(parts['caption'].get_payload(decode=True).decode(), "Акт готов")
+
+        document = parts['document']
+        self.assertEqual(document.get_payload(decode=True), b"%PDF-1.4 payload")
+        self.assertEqual(document.get_filename(), "Акт сверки.pdf")
+        self.assertEqual(document.get_content_type(), "application/pdf")
+
+    def test_network_error_does_not_raise(self):
+        def boom(request, timeout=None):
+            raise OSError("no route to host")
+
+        real_urlopen = api.urllib.request.urlopen
+        api.urllib.request.urlopen = boom
+        try:
+            result = api.send_document("123:FAKE", 555, "a.pdf", b"x")
+        finally:
+            api.urllib.request.urlopen = real_urlopen
+
+        self.assertFalse(result["ok"])
+        self.assertIn("no route to host", result["description"])

@@ -340,6 +340,57 @@ class DjangoApi {
       '${date.month.toString().padLeft(2, '0')}-'
       '${date.day.toString().padLeft(2, '0')}';
 
+  /// Создаёт заявку на акт сверки за период. Файл формирует 1С, поэтому сразу
+  /// приходит заявка в статусе pending — её потом опрашивает экран.
+  /// Возвращает (заявка, текст ошибки).
+  Future<(ActRequest?, String?)> createActRequest(
+    DateTime dateFrom,
+    DateTime dateTo,
+  ) async {
+    try {
+      final response = await _dio.post(
+        'reports/act/',
+        data: {'date_from': _isoDate(dateFrom), 'date_to': _isoDate(dateTo)},
+        options: Options(headers: {'Authorization': 'Bearer $tokenAccess'}),
+      );
+      final data = response.data;
+      if (response.statusCode == 200 && data is Map && data['result'] is Map) {
+        return (
+          ActRequest.fromJson(Map<String, dynamic>.from(data['result'] as Map)),
+          null,
+        );
+      }
+      return (null, 'Непредвиденный ответ сервера (${response.statusCode}).');
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      if (data is Map && data['message'] != null) {
+        return (null, data['message'].toString());
+      }
+      return (null, 'Не удалось отправить заявку. Проверьте интернет.');
+    } catch (e) {
+      return (null, 'Ошибка запроса акта: $e');
+    }
+  }
+
+  /// Текущее состояние заявки на акт сверки (экран опрашивает, пока pending).
+  Future<ActRequest?> getActRequest(String id) async {
+    try {
+      final response = await _dio.get(
+        'reports/act/$id/',
+        options: Options(headers: {'Authorization': 'Bearer $tokenAccess'}),
+      );
+      final data = response.data;
+      if (response.statusCode == 200 && data is Map && data['result'] is Map) {
+        return ActRequest.fromJson(
+          Map<String, dynamic>.from(data['result'] as Map),
+        );
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   /// Перечитывает профиль вошедшего пользователя с сервера и обновляет [currentUser].
   ///
   /// Профиль в памяти — снимок на момент входа. Если 1С привязала контрагента,

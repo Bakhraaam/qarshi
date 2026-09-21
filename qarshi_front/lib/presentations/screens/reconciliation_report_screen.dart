@@ -1,4 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:qarshi/core/data/api/api_django.dart';
+import 'package:qarshi/core/data/models.dart';
+import 'package:qarshi/core/utils/telegram_launch.dart';
 
 class ReconciliationReportScreen extends StatefulWidget {
   const ReconciliationReportScreen({super.key});
@@ -8,13 +13,26 @@ class ReconciliationReportScreen extends StatefulWidget {
       _ReconciliationReportScreenState();
 }
 
+/// Как часто спрашиваем сервер, не пришёл ли акт из 1С.
+const Duration _pollInterval = Duration(seconds: 3);
+
+/// Сколько ждём на экране. Дальше акт всё равно придёт — сообщением в Telegram,
+/// поэтому держать человека у экрана дольше незачем.
+const Duration _pollTimeout = Duration(minutes: 3);
+
 class _ReconciliationReportScreenState
     extends State<ReconciliationReportScreen> {
+  final DjangoApi _api = DjangoApi();
+
   DateTime? _dateFrom;
   DateTime? _dateTo;
 
   bool _isLoading = false;
-  bool _hasGeneratedReport = false;
+
+  /// Текущая заявка: pending — ждём 1С, ready — есть файл, failed — отказ.
+  ActRequest? _request;
+  Timer? _pollTimer;
+  DateTime? _pollStartedAt;
 
   @override
   void initState() {
@@ -24,6 +42,12 @@ class _ReconciliationReportScreenState
 
     _dateFrom = DateTime(now.year, now.month, 1);
     _dateTo = now;
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _selectDate({required bool isStartDate}) async {
@@ -60,8 +84,14 @@ class _ReconciliationReportScreenState
         }
       }
 
-      _hasGeneratedReport = false;
+      _resetRequest();
     });
+  }
+
+  /// Период изменили — прежний акт к нему не относится.
+  void _resetRequest() {
+    _pollTimer?.cancel();
+    _request = null;
   }
 
   void _setCurrentMonth() {
@@ -70,7 +100,7 @@ class _ReconciliationReportScreenState
     setState(() {
       _dateFrom = DateTime(now.year, now.month, 1);
       _dateTo = now;
-      _hasGeneratedReport = false;
+      _resetRequest();
     });
   }
 
@@ -88,7 +118,7 @@ class _ReconciliationReportScreenState
         1,
       );
       _dateTo = lastDayPreviousMonth;
-      _hasGeneratedReport = false;
+      _resetRequest();
     });
   }
 
@@ -98,62 +128,80 @@ class _ReconciliationReportScreenState
     setState(() {
       _dateFrom = DateTime(now.year, 1, 1);
       _dateTo = now;
-      _hasGeneratedReport = false;
+      _resetRequest();
     });
   }
 
   Future<void> _generateReport() async {
     if (_dateFrom == null || _dateTo == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Выберите период формирования')),
-      );
+      _toast('Выберите период формирования');
       return;
     }
 
     if (_dateFrom!.isAfter(_dateTo!)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Дата начала не может быть позже даты окончания'),
-        ),
-      );
+      _toast('Дата начала не может быть позже даты окончания');
       return;
     }
 
     setState(() => _isLoading = true);
 
-    try {
-      // TODO: Здесь вызовите API формирования акта сверки.
-      //
-      // Пример:
-      // final result = await DjangoApi().getReconciliationReport(
-      //   dateFrom: _dateFrom!,
-      //   dateTo: _dateTo!,
-      // );
-      //
-      // После получения результата сохраните его в состоянии.
+    final (request, error) = await _api.createActRequest(_dateFrom!, _dateTo!);
 
-      await Future<void>.delayed(const Duration(seconds: 2));
+    if (!mounted) return;
+    setState(() {
+      _isLoading = false;
+      _request = request;
+    });
 
-      if (!mounted) return;
-
-      setState(() {
-        _hasGeneratedReport = true;
-      });
-    } catch (e) {
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Не удалось сформировать акт сверки')),
-      );
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+    if (request == null) {
+      _toast(error ?? 'Не удалось отправить заявку на акт сверки');
+      return;
     }
+
+    if (request.isPending) _startPolling();
+  }
+
+  /// Пока экран открыт, сами спрашиваем сервер: так клиент увидит готовый акт,
+  /// не выходя в Telegram за сообщением.
+  void _startPolling() {
+    _pollTimer?.cancel();
+    _pollStartedAt = DateTime.now();
+    _pollTimer = Timer.periodic(_pollInterval, (timer) async {
+      final id = _request?.id;
+      if (id == null || !mounted) {
+        timer.cancel();
+        return;
+      }
+
+      if (DateTime.now().difference(_pollStartedAt!) > _pollTimeout) {
+        timer.cancel();
+        return;
+      }
+
+      final fresh = await _api.getActRequest(id);
+      if (!mounted || fresh == null) return;
+
+      if (!fresh.isPending) {
+        timer.cancel();
+        setState(() => _request = fresh);
+      }
+    });
   }
 
   Future<void> _downloadReport() async {
-    // TODO: Добавьте скачивание PDF, Excel или открытие файла.
+    final url = _request?.fileUrl ?? '';
+    if (url.isEmpty) {
+      _toast('Файл ещё не готов');
+      return;
+    }
+    // Ссылка подписана и живёт неделю — её же клиент получил в Telegram.
+    openExternalLink(url);
+  }
+
+  void _toast(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   String _formatDate(DateTime? date) {
@@ -327,16 +375,23 @@ class _ReconciliationReportScreenState
   }
 
   Widget _buildResultCard() {
-    if (_isLoading) {
+    final request = _request;
+
+    if (_isLoading || (request != null && request.isPending)) {
       return const _ReportLoadingCard();
     }
 
-    if (_hasGeneratedReport) {
+    if (request != null && request.isReady) {
       return _GeneratedReportCard(
         dateFrom: _formatDate(_dateFrom),
         dateTo: _formatDate(_dateTo),
+        filename: request.filename,
         onDownload: _downloadReport,
       );
+    }
+
+    if (request != null && request.isFailed) {
+      return _FailedReportCard(message: request.message);
     }
 
     return const _EmptyReportCard();
@@ -523,7 +578,7 @@ class _ReportLoadingCard extends StatelessWidget {
             ),
             SizedBox(height: 20),
             Text(
-              'Формируем акт сверки',
+              'Заявка передана в 1С',
               style: TextStyle(
                 color: Color(0xFF0F172A),
                 fontSize: 17,
@@ -532,9 +587,73 @@ class _ReportLoadingCard extends StatelessWidget {
             ),
             SizedBox(height: 7),
             Text(
-              'Получаем данные из 1С. Это может занять некоторое время.',
+              'Акт формируется. Файл появится здесь, а ссылку на него '
+              'мы пришлём сообщением в Telegram — можно закрыть экран.',
               textAlign: TextAlign.center,
               style: TextStyle(
+                color: Color(0xFF64748B),
+                fontSize: 12,
+                height: 1.4,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 1С не смогла построить акт: показываем её причину как есть.
+class _FailedReportCard extends StatelessWidget {
+  final String message;
+
+  const _FailedReportCard({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(minHeight: 390),
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 56,
+              height: 56,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEE2E2),
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: const Icon(
+                Icons.error_outline_rounded,
+                color: Color(0xFFDC2626),
+                size: 28,
+              ),
+            ),
+            const SizedBox(height: 18),
+            const Text(
+              'Акт сверки не сформирован',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Color(0xFF0F172A),
+                fontSize: 17,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 7),
+            Text(
+              message.isEmpty
+                  ? 'Попробуйте другой период или обратитесь к менеджеру.'
+                  : message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
                 color: Color(0xFF64748B),
                 fontSize: 12,
                 height: 1.4,
@@ -550,11 +669,13 @@ class _ReportLoadingCard extends StatelessWidget {
 class _GeneratedReportCard extends StatelessWidget {
   final String dateFrom;
   final String dateTo;
+  final String filename;
   final VoidCallback onDownload;
 
   const _GeneratedReportCard({
     required this.dateFrom,
     required this.dateTo,
+    required this.filename,
     required this.onDownload,
   });
 
@@ -623,7 +744,11 @@ class _GeneratedReportCard extends StatelessWidget {
               children: [
                 _ReportInfoRow(label: 'Период', value: '$dateFrom — $dateTo'),
                 const SizedBox(height: 12),
-                const _ReportInfoRow(label: 'Формат', value: 'PDF / Excel'),
+                // Имя файла приходит из 1С — показываем его, а не выдуманный формат.
+                _ReportInfoRow(
+                  label: 'Файл',
+                  value: filename.isEmpty ? 'Документ' : filename,
+                ),
                 const SizedBox(height: 12),
                 const _ReportInfoRow(
                   label: 'Статус',

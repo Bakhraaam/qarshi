@@ -112,3 +112,9 @@ double _cssPx(String name) {
     return 0;
   }
 }
+
+/// Открыть ссылку новой вкладкой. Используется для скачивания готовых файлов.
+void openUrl(String url) {
+  if (url.isEmpty) return;
+  web.window.open(url, '_blank');
+}

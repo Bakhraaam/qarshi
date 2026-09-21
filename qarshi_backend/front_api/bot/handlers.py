@@ -3,13 +3,18 @@
 
 Сценарии (см. тексты в texts.py):
   /start без телефона      -> приветствие + кнопка «Отправить номер телефона»
-  /start с телефоном       -> короткое приветствие + кнопки каталога/заказов
+  /start с телефоном       -> приветствие, клавиатура убирается
   прислали свой контакт    -> сохраняем номер; ответ зависит от того, привязан ли
                               профиль к контрагенту 1С (guid_partner1c)
   прислали чужой контакт   -> просим свой
-  любой другой текст       -> напоминание про кнопку
+  любой другой текст       -> отправляем в приложение
   доступ закрыт менеджером -> сообщение с телефоном поддержки
+
+Единственная кнопка бота — запрос контакта; навигацию приложения он не дублирует,
+Mini App открывают штатные входы Telegram. Пока номера нет, кнопка показывается,
+после получения номера уходит remove_keyboard.
 """
+from front_api.models import TelegramAccount
 from front_api.utils import normalize_phone
 
 from . import api, texts
@@ -42,7 +47,7 @@ def handle_update(organization, update: dict) -> None:
 
     contact = message.get('contact')
     if contact:
-        _handle_contact(organization, chat_id, account, profile, tg_user, contact)
+        _handle_contact(organization, chat_id, account, profile, message, contact)
         return
 
     text = (message.get('text') or '').strip()
@@ -52,9 +57,9 @@ def handle_update(organization, update: dict) -> None:
 
     # Любое другое сообщение: бот не ведёт переписку, всё общение — в приложении
     if account.phone:
-        api.send_message(token, chat_id, texts.hint_use_buttons(), api.keyboard_remove())
+        api.send_message(token, chat_id, texts.open_app(organization), api.keyboard_remove())
     else:
-        api.send_message(token, chat_id, texts.text_instead_of_button(), api.keyboard_ask_phone(organization))
+        api.send_message(token, chat_id, texts.phone_still_needed(), api.keyboard_ask_phone())
 
 
 def _handle_start(organization, chat_id, account) -> None:
@@ -68,22 +73,52 @@ def _handle_start(organization, chat_id, account) -> None:
     else:
         api.send_message(
             token, chat_id,
-            texts.start_no_phone(organization),
-            api.keyboard_ask_phone(organization),
+            texts.start_ask_phone(organization, account.tg_first_name),
+            api.keyboard_ask_phone(),
         )
 
 
-def _handle_contact(organization, chat_id, account, profile, tg_user, contact: dict) -> None:
-    token = organization.telegram_bot_token
+def _handle_contact(organization, chat_id, account, profile, message, contact: dict) -> None:
+    """Принимаем ТОЛЬКО номер самого отправителя, полученный кнопкой запроса контакта.
 
-    # Контакт можно переслать из адресной книги — принимаем только свой номер
+    Чем пытаются подменить номер и что этому мешает:
+      * прислать карточку другого пользователя из адресной книги — в contact лежит
+        его user_id, он не совпадает с автором сообщения;
+      * создать контакт вручную с любым номером — у такого контакта user_id вообще
+        нет, Telegram подставляет его только для настоящих аккаунтов;
+      * переслать чужое сообщение с контактом — у сообщения есть признак пересылки,
+        такие не принимаем совсем;
+      * занять номер, уже привязанный к другому Telegram-аккаунту, — отказываем и
+        отправляем к менеджеру, иначе двое могли бы претендовать на одного контрагента.
+    """
+    token = organization.telegram_bot_token
+    tg_user = message.get('from') or {}
+
+    # Пересланное сообщение — не собственный контакт «здесь и сейчас».
+    is_forwarded = any(
+        key in message
+        for key in ('forward_origin', 'forward_from', 'forward_from_chat', 'forward_sender_name')
+    )
+    if is_forwarded:
+        api.send_message(token, chat_id, texts.foreign_contact(), api.keyboard_ask_phone())
+        return
+
+    # Контакт без user_id — созданный вручную, с произвольным номером.
     if contact.get('user_id') != tg_user.get('id'):
-        api.send_message(token, chat_id, texts.foreign_contact(), api.keyboard_ask_phone(organization))
+        api.send_message(token, chat_id, texts.foreign_contact(), api.keyboard_ask_phone())
         return
 
     phone = normalize_phone(contact.get('phone_number'))
     if not phone:
-        api.send_message(token, chat_id, texts.foreign_contact(), api.keyboard_ask_phone(organization))
+        api.send_message(token, chat_id, texts.foreign_contact(), api.keyboard_ask_phone())
+        return
+
+    taken_by_other = (TelegramAccount.objects
+                      .filter(phone=phone)
+                      .exclude(pk=account.pk)
+                      .exists())
+    if taken_by_other:
+        api.send_message(token, chat_id, texts.phone_taken(organization), api.keyboard_remove())
         return
 
     if account.phone != phone:
