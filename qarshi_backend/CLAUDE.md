@@ -72,7 +72,16 @@ Telegram must not retry what we cannot process.
 
 Phone is **requested, not required**: nothing gates on `TelegramAccount.phone`, but 1C matches a signup to a
 counterparty by it (`user-profiles/unlinked/` carries `telegram.phone`), so the bot asks on `/start` until it
-has one. The number must be the sender's own, and `_handle_contact` enforces that on four fronts: the button
+has one.
+
+**How 1C learns about new profiles without receiving them twice.** `GET sync_1c/user-profiles/unlinked/`
+(same as `user-profiles/?only_unlinked=1`) returns profiles with **empty `code_1c` and empty `guid_partner1c`**.
+`UserProfile.code_1c` is the profile's code in 1C: 1C assigns one to every user the moment it registers it,
+long before (and independently of) the counterparty link, so it is the "1C has received this" acknowledgement.
+1C writes it back with `POST sync_1c/user-profiles/upsert/` `[{"id", "code_1c" | "code", ...}]`; after that
+the profile leaves the `unlinked/` feed even while `guid_partner1c` is still empty. Profiles that have a
+`guid_partner1c` but no code predate the field and are excluded too, so the upgrade does not replay them.
+`code_1c` is exported in `user-profiles/` rows and in the `client` object of `orders/pull/`. The number must be the sender's own, and `_handle_contact` enforces that on four fronts: the button
 itself (Telegram fills the number, the client cannot edit it), `contact.user_id == message.from.id` (rejects
 both a contact card of another user and a hand-made contact, which has no `user_id` at all), no
 `forward_*` on the message, and the phone not already attached to a different `TelegramAccount` — otherwise a

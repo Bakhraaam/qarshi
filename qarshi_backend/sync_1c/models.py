@@ -267,6 +267,14 @@ class UserProfile(models.Model):
     organization = models.ForeignKey('Organization', null=False, on_delete=models.CASCADE, related_name='profiles',
                                      verbose_name="Организация")
 
+    # Код профиля в 1С. 1С присваивает его каждому пользователю при регистрации,
+    # ещё до привязки к контрагенту, поэтому пустой код — надёжный признак
+    # «1С этот профиль ещё не получала»: именно по нему строится выдача новых
+    # профилей (user-profiles/unlinked/), а не по guid_partner1c, который может
+    # появиться гораздо позже или не появиться вовсе.
+    code_1c = models.CharField(max_length=50, blank=True, default="", db_index=True,
+                               verbose_name="Код в 1С")
+
     # GUID контрагента в 1С. Пусто, пока 1С не привязала профиль к своему контрагенту.
     guid_partner1c = models.CharField(max_length=255, null=True, blank=True, db_index=True,
                                       verbose_name="GUID контрагента 1С")

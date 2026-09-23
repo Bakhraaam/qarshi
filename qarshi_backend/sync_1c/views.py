@@ -629,6 +629,7 @@ class Sync1cUpdateUsersView(Base1cAPIView):
                         inn=u.get("inn", ""),
                         price_type=pt,
                         organization_id=org_id,
+                        code_1c=(u.get("code_1c") or u.get("code") or ""),
                         guid_partner1c=u.get("guid_partner1c", ""),
                     ))
 
@@ -637,7 +638,8 @@ class Sync1cUpdateUsersView(Base1cAPIView):
                         profiles_to_upsert,
                         update_conflicts=True,
                         unique_fields=['id'],
-                        update_fields=['user', 'name', 'inn', 'price_type', 'organization', 'guid_partner1c'],
+                        update_fields=['user', 'name', 'inn', 'price_type', 'organization',
+                                       'code_1c', 'guid_partner1c'],
                         batch_size=SYNC_BATCH_SIZE,
                     )
         except IntegrityError:
@@ -1315,7 +1317,9 @@ class Sync1cUpdateStocksView(Base1cAPIView):
 class Sync1cUserProfileListView(Base1cAPIView):
     """
     GET: список профилей контрагентов для 1С.
-    ?only_unlinked=1 — только непривязанные (пустой guid_partner1c).
+    ?only_unlinked=1 — только новые для 1С: без кода (code_1c) и без привязки
+        (guid_partner1c). Профиль уходит из этой выборки, как только 1С вернула
+        ему код через user-profiles/upsert/ — даже если контрагента ещё нет.
     ?organization_id=<uuid> — только профили этой организации (филиала).
     """
     only_unlinked = False
@@ -1347,7 +1351,11 @@ class Sync1cUserProfileListView(Base1cAPIView):
         flag = request.query_params.get('only_unlinked')
         want_unlinked = self.only_unlinked or (str(flag).lower() in ('1', 'true', 'yes'))
         if want_unlinked:
-            qs = qs.filter(Q(guid_partner1c__isnull=True) | Q(guid_partner1c=''))
+            # Признак «1С ещё не получала» — пустой код. Профили с guid, но без кода
+            # исключаем тоже: они заведены до появления кода, 1С их уже знает, и
+            # после обновления они не должны свалиться в 1С повторно.
+            qs = (qs.filter(code_1c='')
+                    .filter(Q(guid_partner1c__isnull=True) | Q(guid_partner1c='')))
 
         qs = qs.order_by('name', 'id')
         serializer = UserProfileSyncSerializer(qs, many=True)
@@ -1361,7 +1369,7 @@ class Sync1cUserProfileListView(Base1cAPIView):
 
 
 class Sync1cUserProfileUnlinkedView(Sync1cUserProfileListView):
-    """GET: только непривязанные профили (пустой guid_partner1c)."""
+    """GET: только новые для 1С профили (пустые code_1c и guid_partner1c)."""
     only_unlinked = True
 
 
@@ -1369,9 +1377,11 @@ class Sync1cUserProfileUpsertView(Base1cAPIView):
     """
     POST: создание/обновление профилей контрагентов из 1С.
     Принимает объект или массив объектов вида:
-      {"id": "<uuid профиля>", "guid_partner1c": "...", "name": "...",
+      {"id": "<uuid профиля>", "code_1c": "...", "guid_partner1c": "...", "name": "...",
        "inn": "...", "price_type": "<uuid>", "is_blocked": false}
-    Обновляются существующие профили (по id): привязка guid_partner1c и полей.
+    Обновляются существующие профили (по id): код 1С, привязка guid_partner1c и поля.
+    code_1c (допускается и ключ "code") — подтверждение, что 1С профиль получила:
+    после него профиль больше не попадает в user-profiles/unlinked/.
     Профиль должен существовать (создаётся при само-регистрации через Telegram
     или эндпоинтом /user-profile/). Несуществующие id пропускаются.
     """
@@ -1415,6 +1425,10 @@ class Sync1cUserProfileUpsertView(Base1cAPIView):
                 not_found += 1
                 continue
 
+            if "code_1c" in r or "code" in r:
+                code = r.get("code_1c") if "code_1c" in r else r.get("code")
+                profile.code_1c = str(code or "").strip()
+                update_fields.add("code_1c")
             if "guid_partner1c" in r:
                 profile.guid_partner1c = r.get("guid_partner1c") or ""
                 update_fields.add("guid_partner1c")

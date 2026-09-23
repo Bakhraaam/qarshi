@@ -112,6 +112,7 @@ class Order1COutputSerializer(serializers.ModelSerializer):
         # Полная анкета, чтобы 1С могла создать/сопоставить контрагента
         return {
             "id": str(profile.id) if profile else None,
+            "code_1c": (profile.code_1c if profile else "") or "",
             "guid_partner1c": profile.guid_partner1c if profile else None,
             "username": user.username,
             "inn": profile.inn if profile else None,
@@ -205,7 +206,7 @@ class UserProfileSyncSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserProfile
         fields = [
-            'id', 'name', 'inn', 'guid_partner1c', 'is_blocked',
+            'id', 'code_1c', 'name', 'inn', 'guid_partner1c', 'is_blocked',
             'organization_id', 'price_type_id', 'username', 'telegram',
         ]
 

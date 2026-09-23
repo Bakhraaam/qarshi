@@ -249,11 +249,11 @@ class PriceListAdmin(admin.ModelAdmin):
 
 @admin.register(UserProfile)
 class UserProfileAdmin(admin.ModelAdmin):
-    list_display = ('name', 'user', 'organization', 'price_type', 'inn',
+    list_display = ('name', 'user', 'organization', 'price_type', 'inn', 'code_1c',
                     'is_linked_to_1c', 'is_blocked', 'id')
     list_display_links = ('name', 'user')
     list_filter = ('organization', 'is_blocked', 'price_type')
-    search_fields = ('name', 'inn', 'guid_partner1c', 'user__username')
+    search_fields = ('name', 'inn', 'code_1c', 'guid_partner1c', 'user__username')
     list_select_related = ('user', 'organization', 'price_type')
     ordering = ('organization', 'name')
     list_per_page = 50

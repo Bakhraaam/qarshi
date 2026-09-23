@@ -706,13 +706,16 @@ class Sync1cUserProfileListFilterTests(TestCase):
         pt_a = PriceType.objects.create(name="Розница", organization=cls.org_a, is_default=True)
         pt_b = PriceType.objects.create(name="Розница", organization=cls.org_b, is_default=True)
 
-        def profile(username, org, price_type, guid=None):
+        def profile(username, org, price_type, guid=None, code=""):
             user = User.objects.create_user(username=username, password="x")
             return UserProfile.objects.create(user=user, name=username, organization=org,
-                                              price_type=price_type, guid_partner1c=guid)
+                                              price_type=price_type, guid_partner1c=guid,
+                                              code_1c=code)
 
         cls.a_linked = profile("a_linked", cls.org_a, pt_a, guid="p-1")
         cls.a_unlinked = profile("a_unlinked", cls.org_a, pt_a)
+        # 1С уже зарегистрировала (дала код), но контрагента пока не привязала.
+        cls.a_coded = profile("a_coded", cls.org_a, pt_a, code="000123")
         cls.b_unlinked = profile("b_unlinked", cls.org_b, pt_b)
 
     def setUp(self):
@@ -729,16 +732,38 @@ class Sync1cUserProfileListFilterTests(TestCase):
     def test_without_filter_returns_all_organizations(self):
         response = self.get("user-profiles/")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(self.names(response), ["a_linked", "a_unlinked", "b_unlinked"])
+        self.assertEqual(self.names(response), ["a_coded", "a_linked", "a_unlinked", "b_unlinked"])
         self.assertIsNone(response.json()["organization_id"])
 
     def test_filter_by_organization(self):
         response = self.get("user-profiles/", organization_id=str(self.org_a.id))
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertEqual(self.names(response), ["a_linked", "a_unlinked"])
-        self.assertEqual(body["count"], 2)
+        self.assertEqual(self.names(response), ["a_coded", "a_linked", "a_unlinked"])
+        self.assertEqual(body["count"], 3)
         self.assertEqual(body["organization_id"], str(self.org_a.id))
+
+    def test_unlinked_is_only_profiles_1c_has_not_seen(self):
+        # Ни кода, ни guid — новый для 1С. С кодом без guid — уже получен, не повторяем.
+        # С guid без кода — заведён до появления кода, тоже не повторяем.
+        response = self.get("user-profiles/unlinked/")
+        self.assertEqual(self.names(response), ["a_unlinked", "b_unlinked"])
+        row = next(r for r in response.json()["result"] if r["name"] == "a_unlinked")
+        self.assertEqual(row["code_1c"], "")
+
+    def test_code_from_1c_removes_profile_from_unlinked(self):
+        response = self.client.post(
+            "/sync_1c/user-profiles/upsert/",
+            [{"id": str(self.a_unlinked.id), "code": "000777"}],
+            content_type="application/json", **self.auth,
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(response.json()["ok"])
+        self.a_unlinked.refresh_from_db()
+        self.assertEqual(self.a_unlinked.code_1c, "000777")
+        # Контрагент всё ещё не привязан, но 1С профиль уже знает.
+        self.assertFalse(self.a_unlinked.guid_partner1c)
+        self.assertEqual(self.names(self.get("user-profiles/unlinked/")), ["b_unlinked"])
 
     def test_filter_combines_with_unlinked(self):
         # Отдельный маршрут unlinked/ наследует фильтр.

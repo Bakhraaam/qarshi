@@ -453,8 +453,15 @@ class _ReconciliationReportScreenState
   Widget _buildResultCard() {
     final request = _request;
 
-    if (_isLoading || (request != null && request.isPending)) {
-      return const _ReportLoadingCard();
+    // Спиннер — только пока запрос летит на сервер. Дальше 1С формирует акт
+    // сама, и бесконечная крутилка читалась как «страница зависла»: клиент
+    // ждал её окончания, а не читал текст. Принятая заявка — галочка.
+    if (_isLoading) {
+      return const _ReportSubmittingCard();
+    }
+
+    if (request != null && request.isPending) {
+      return const _ReportPendingCard();
     }
 
     if (request != null && request.isReady) {
@@ -627,8 +634,95 @@ class _EmptyReportCard extends StatelessWidget {
   }
 }
 
-class _ReportLoadingCard extends StatelessWidget {
-  const _ReportLoadingCard();
+/// Запрос ещё не дошёл до сервера: единственное место, где уместен спиннер.
+class _ReportSubmittingCard extends StatelessWidget {
+  const _ReportSubmittingCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return const _ReportStatusCard(
+      icon: SizedBox(
+        width: 46,
+        height: 46,
+        child: CircularProgressIndicator(
+          strokeWidth: 3,
+          color: Color(0xFF2563EB),
+        ),
+      ),
+      title: 'Отправляем заявку...',
+      message: 'Секунду, передаём запрос в 1С.',
+    );
+  }
+}
+
+/// Заявка принята, 1С формирует акт. Показываем галочку «отправлено», а не
+/// индикатор загрузки: ждать здесь ничего не нужно, экран можно закрыть.
+class _ReportPendingCard extends StatelessWidget {
+  const _ReportPendingCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return _ReportStatusCard(
+      icon: Container(
+        width: 56,
+        height: 56,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: const Color(0xFFDCFCE7),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: const Icon(
+          Icons.check_rounded,
+          color: Color(0xFF16A34A),
+          size: 30,
+        ),
+      ),
+      title: 'Заявка передана в 1С',
+      message: 'Акт формируется. Когда файл будет готов, он появится здесь '
+          'и придёт сообщением в Telegram — экран можно закрыть.',
+      footer: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFEF3C7),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.schedule_rounded,
+              size: 16,
+              color: Color(0xFFD97706),
+            ),
+            SizedBox(width: 6),
+            Text(
+              'Ожидаем ответ 1С',
+              style: TextStyle(
+                color: Color(0xFFB45309),
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Общая рамка карточек состояния: иконка, заголовок, пояснение, опционально бейдж.
+class _ReportStatusCard extends StatelessWidget {
+  final Widget icon;
+  final String title;
+  final String message;
+  final Widget? footer;
+
+  const _ReportStatusCard({
+    required this.icon,
+    required this.title,
+    required this.message,
+    this.footer,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -640,38 +734,35 @@ class _ReportLoadingCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: const Color(0xFFE2E8F0)),
       ),
-      child: const Center(
+      child: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            SizedBox(
-              width: 46,
-              height: 46,
-              child: CircularProgressIndicator(
-                strokeWidth: 3,
-                color: Color(0xFF2563EB),
-              ),
-            ),
-            SizedBox(height: 20),
+            icon,
+            const SizedBox(height: 20),
             Text(
-              'Заявка передана в 1С',
-              style: TextStyle(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
                 color: Color(0xFF0F172A),
                 fontSize: 17,
                 fontWeight: FontWeight.w800,
               ),
             ),
-            SizedBox(height: 7),
+            const SizedBox(height: 7),
             Text(
-              'Акт формируется. Файл появится здесь, а ссылку на него '
-              'мы пришлём сообщением в Telegram — можно закрыть экран.',
+              message,
               textAlign: TextAlign.center,
-              style: TextStyle(
+              style: const TextStyle(
                 color: Color(0xFF64748B),
                 fontSize: 12,
                 height: 1.4,
               ),
             ),
+            if (footer != null) ...[
+              const SizedBox(height: 18),
+              footer!,
+            ],
           ],
         ),
       ),
