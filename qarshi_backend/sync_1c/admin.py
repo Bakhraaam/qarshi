@@ -28,7 +28,7 @@ class OrganizationAdmin(admin.ModelAdmin):
             'fields': ('support_phone', 'instagram', 'unregistered_notice')
         }),
         ('Telegram-бот филиала', {
-            'fields': ('telegram_bot_token',)
+            'fields': ('telegram_bot_token', 'start_text')
         }),
     ]
     readonly_fields = ('id',)

@@ -64,6 +64,10 @@ so no extra DB field and nothing to sync with 1C. Anything other than a bad secr
 Telegram must not retry what we cannot process.
 
 - `bot/texts.py` — all wording (business tone, ru only). Edit texts here, never in handlers.
+  A branch can override the `/start` reply: `Organization.start_text` (admin, or 1C via
+  `POST sync_1c/organizations/` field `start_text`). Non-empty ⇒ sent verbatim instead of
+  `start_ask_phone` / `start_with_phone`; the keyboard logic is untouched (contact button until a
+  phone is known). Empty ⇒ the built-in texts.
 - `bot/api.py` — Bot API client on stdlib `urllib` (no new dependency) + the one keyboard. The bot does
   **not** duplicate in-app navigation: its only button is the contact request, removed once the number
   arrives. The Mini App is opened by Telegram's own entry points (menu button / "Open" on the bot).
@@ -156,7 +160,9 @@ in the wide checkout panel is deliberately **not** sent: the order total is alwa
 `ItemImage.is_invalid` hides a picture from the catalog **without deleting the file**, so 1C can bring it
 back with a single flag. Two ways to set it: `POST sync_1c/images/validity/` with
 `[{"id": ..., "is_invalid": true}, ...]` (no file transfer), or an `is_invalid` field alongside an upload
-to `image_item_upload/`. Deleting a picture outright is still `image_item_upload/` with an empty `image`.
+to `image_item_upload/`. Deleting a picture outright is still `image_item_upload/` with an empty (or absent) `image` — only `id`
+is required. Both delete and `images/validity/` are idempotent: an unknown or malformed `id` answers 200
+(`ok: true`), because by then 1C has already dropped the picture and could not resend it.
 
 ### Акт сверки (reconciliation report)
 The site never calls 1C: the request is queued and 1C picks it up, exactly like orders.

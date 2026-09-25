@@ -4,6 +4,8 @@
 Сценарии (см. тексты в texts.py):
   /start без телефона      -> приветствие + кнопка «Отправить номер телефона»
   /start с телефоном       -> приветствие, клавиатура убирается
+  (если у филиала заполнен start_text — вместо приветствия шлётся он,
+   клавиатура при этом та же)
   прислали свой контакт    -> сохраняем номер; ответ зависит от того, привязан ли
                               профиль к контрагенту 1С (guid_partner1c)
   прислали чужой контакт   -> просим свой
@@ -64,18 +66,16 @@ def handle_update(organization, update: dict) -> None:
 
 def _handle_start(organization, chat_id, account) -> None:
     token = organization.telegram_bot_token
+    # Филиал может задать свой текст после /start (Organization.start_text,
+    # приходит из 1С в organizations/). Пустое поле — стандартные приветствия.
+    custom = texts.custom_start(organization)
     if account.phone:
-        api.send_message(
-            token, chat_id,
-            texts.start_with_phone(organization, account.tg_first_name),
-            api.keyboard_remove(),
-        )
+        text = custom or texts.start_with_phone(organization, account.tg_first_name)
+        keyboard = api.keyboard_remove()
     else:
-        api.send_message(
-            token, chat_id,
-            texts.start_ask_phone(organization, account.tg_first_name),
-            api.keyboard_ask_phone(),
-        )
+        text = custom or texts.start_ask_phone(organization, account.tg_first_name)
+        keyboard = api.keyboard_ask_phone()
+    api.send_message(token, chat_id, text, keyboard)
 
 
 def _handle_contact(organization, chat_id, account, profile, message, contact: dict) -> None:

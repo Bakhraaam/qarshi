@@ -160,6 +160,29 @@ class TelegramBotTests(TestCase):
         text = self.assert_no_buttons()
         self.assertIn("заказы, цены и остатки — в приложении", text)
 
+    def test_start_uses_custom_text_when_set(self):
+        Organization.objects.filter(pk=self.org.pk).update(
+            start_text="  Добро пожаловать в оптовый отдел!  ")
+        org = Organization.objects.get(pk=self.org.pk)
+
+        # Без номера: свой текст, но кнопка запроса контакта остаётся
+        handlers.handle_update(org, self.update(text="/start"))
+        text = self.assert_asks_phone()
+        self.assertEqual(text, "Добро пожаловать в оптовый отдел!")
+
+        # С номером: свой текст, клавиатура убирается
+        handlers.handle_update(org, self.contact())
+        handlers.handle_update(org, self.update(text="/start"))
+        text = self.assert_no_buttons()
+        self.assertEqual(text, "Добро пожаловать в оптовый отдел!")
+
+    def test_start_falls_back_to_default_text_when_custom_empty(self):
+        Organization.objects.filter(pk=self.org.pk).update(start_text="   ")
+        org = Organization.objects.get(pk=self.org.pk)
+        handlers.handle_update(org, self.update(text="/start"))
+        text = self.assert_asks_phone()
+        self.assertIn("Здравствуйте, Иван", text)
+
     def test_start_after_phone_has_no_keyboard(self):
         handlers.handle_update(self.org, self.contact())
         handlers.handle_update(self.org, self.update(text="/start"))
@@ -182,6 +205,28 @@ class TelegramBotTests(TestCase):
         handlers.handle_update(self.org, {"my_chat_member": {}})
         self.assertEqual(self.sent, [])
         self.assertFalse(TelegramAccount.objects.exists())
+
+
+class Sync1cOrganizationsUpsertTests(TestCase):
+    """organizations/ принимает start_text; отсутствие ключа в старом обмене = пусто."""
+
+    def setUp(self):
+        from rest_framework.test import APIClient
+        user = User.objects.create_user(username="1c", password="x")
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {Token.objects.create(user=user).key}")
+
+    def test_start_text_is_saved_and_updated(self):
+        org_id = str(uuid.uuid4())
+        row = {"id": org_id, "inn": "1", "name": "Филиал", "prefix": "f1",
+               "start_text": "Привет от филиала"}
+        response = self.client.post("/sync_1c/organizations/", [row], format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(Organization.objects.get(pk=org_id).start_text, "Привет от филиала")
+
+        row["start_text"] = ""
+        self.client.post("/sync_1c/organizations/", [row], format="json")
+        self.assertEqual(Organization.objects.get(pk=org_id).start_text, "")
 
 
 class TelegramWebhookViewTests(TestCase):
@@ -681,6 +726,24 @@ class Sync1cPackagesAndImagesTests(TestCase):
         image.refresh_from_db()
         self.assertFalse(image.is_invalid)
         self.assertEqual(image.image_path.name, "products/a.jpg")
+
+    def test_image_delete_needs_only_id_and_is_idempotent(self):
+        image = ItemImage.objects.create(id=uuid.uuid4(), item=self.item,
+                                         image_path="products/a.jpg")
+        # Только id, без item/image — картинка удаляется
+        response = self.post("image_item_upload/", {"id": str(image.id)})
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertFalse(ItemImage.objects.filter(id=image.id).exists())
+
+        # Повтор и неизвестный/битый id — не ошибка: 1С уже удалила картинку у себя
+        for bad_id in (str(image.id), str(uuid.uuid4()), "not-a-guid"):
+            response = self.post("image_item_upload/", {"id": bad_id})
+            self.assertEqual(response.status_code, 200, response.data)
+            self.assertTrue(response.data["ok"])
+
+        # Неизвестный id в validity тоже просто пропускается
+        response = self.post("images/validity/", [{"id": str(uuid.uuid4()), "is_invalid": True}])
+        self.assertEqual(response.status_code, 200, response.data)
 
     def test_images_accept_objects_with_flags(self):
         row = {

@@ -36,6 +36,13 @@ class Organization(models.Model):
         default="",
         verbose_name="Токен Telegram бота"
     )
+    # Текст, который бот отправляет после /start. Пустое поле — бот использует
+    # свои стандартные приветствия (bot/texts.py: start_ask_phone / start_with_phone).
+    start_text = models.TextField(
+        blank=True,
+        default="",
+        verbose_name="Текст бота после /start"
+    )
 
     class Meta:
         verbose_name = "Организация"

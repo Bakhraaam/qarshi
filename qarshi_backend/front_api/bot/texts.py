@@ -25,6 +25,16 @@ def _hello(organization, first_name: str) -> str:
     return f"{organization.name}. Здравствуйте, {who}!" if who else f"{organization.name}."
 
 
+def custom_start(organization) -> str:
+    """Текст после /start, заданный филиалом (Organization.start_text).
+
+    Пустая строка означает «не задан» — тогда бот шлёт стандартные start_ask_phone /
+    start_with_phone. Клавиатура от этого не зависит: без номера кнопка запроса
+    контакта показывается всё равно.
+    """
+    return (getattr(organization, "start_text", "") or "").strip()
+
+
 def start_ask_phone(organization, first_name: str) -> str:
     """/start, номера ещё нет."""
     return _join(

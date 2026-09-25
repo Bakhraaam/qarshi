@@ -2,6 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.db import transaction, IntegrityError
+from django.core.exceptions import ValidationError
 
 from .models import Organization, ItemType, Item, ItemImage, ItemPackage, PriceType, PriceList, UserProfile, ItemStock
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -80,7 +81,8 @@ class Sync1cUpdateOrganizationsView(Base1cAPIView):
                              support_phone=org.get("support_phone", ""),
                              telegram_bot_token=org.get("telegram_bot_token", ""),
                              instagram=org.get("instagram", ""),
-                             unregistered_notice=org.get("unregistered_notice", ""))
+                             unregistered_notice=org.get("unregistered_notice", ""),
+                             start_text=org.get("start_text", ""))
             )
 
         try:
@@ -88,7 +90,7 @@ class Sync1cUpdateOrganizationsView(Base1cAPIView):
                 with transaction.atomic():
                     Organization.objects.bulk_create(
                         orgs_to_upsert, update_conflicts=True,
-                        unique_fields=['id'], update_fields=['inn', 'name', 'prefix', 'support_phone', 'telegram_bot_token', 'instagram', 'unregistered_notice'],
+                        unique_fields=['id'], update_fields=['inn', 'name', 'prefix', 'support_phone', 'telegram_bot_token', 'instagram', 'unregistered_notice', 'start_text'],
                         batch_size=SYNC_BATCH_SIZE,
                     )
         except IntegrityError:
@@ -881,17 +883,20 @@ class ItemImageUploadView(Base1cAPIView):
         if not image_id:
             return Response({"ok": False, "message": "Поле 'id' обязательно"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Логика удаления (остается без изменений)
+        # Удаление: поле `image` отсутствует/пустое/'null'. Достаточно одного `id`.
+        # Удаление идемпотентно: если картинки уже нет (повтор обмена, удалена вручную),
+        # отвечаем 200 — 1С в этот момент картинку уже стёрла и переслать её не сможет.
         if image_file is None or image_file == '' or image_file == 'null':
             try:
                 img_obj = ItemImage.objects.select_related('item').get(id=image_id)
-                org_id = img_obj.item.organization_id
-                img_obj.delete()
-                bump_catalog_version(org_id)  # картинка удалена — сбрасываем кэш каталога
-                return Response({"ok": True, "message": f"Картинка с ID {image_id} успешно удалена"},
+            except (ItemImage.DoesNotExist, ValidationError, ValueError):
+                return Response({"ok": True, "message": f"Картинки с ID {image_id} уже нет"},
                                 status=status.HTTP_200_OK)
-            except ItemImage.DoesNotExist:
-                return Response({"ok": False, "message": "Картинка не найдена"}, status=status.HTTP_404_NOT_FOUND)
+            org_id = img_obj.item.organization_id
+            img_obj.delete()
+            bump_catalog_version(org_id)  # картинка удалена — сбрасываем кэш каталога
+            return Response({"ok": True, "message": f"Картинка с ID {image_id} успешно удалена"},
+                            status=status.HTTP_200_OK)
 
         if not item_id:
             return Response({"ok": False, "message": "Поле 'item' обязательно"}, status=status.HTTP_400_BAD_REQUEST)
